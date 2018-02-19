@@ -1,0 +1,584 @@
+---
+title: "HW2"
+author: "Rohit Singh"
+date: "2/15/2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r lib, include=FALSE , echo=FALSE,warning=FALSE}
+library(knitr) 
+library(AER)
+library(quantreg)
+library(car)
+#library(cvTools)
+
+# load data
+data(CPS1988)
+```
+
+# Section 1
+In this Section we will try to replicate the data as presented in the paper [1]. This paper aims at testing of quantile regression model with samples from the March 1988 Current Population Survey (CPS) data [2]. The data consists of $28,155$ observations on men ages from $18$ to $70$ with positive annual income ($>\$50$). The observation has age variables like years of schooling ($0-18$), years of experience i.e., $Age-years of schooling-6$; and some dummy variables for race, lived in metropolitan area or not, geographic region, Part time or full time. The men considered in the data are not self employed or working without pay; which is important we want to see the effect of education or experience on the wages of the individuals.
+
+Linear regression is the relationship between predictor and response variables based on the conditional mean of $ E(y|x)$ [3]. In this paper quantile regression has been used which is the relationship between predictor and specific quantiles of the response variables [3]. Quantile regression is not sensitive to outliers as it compares the quantiles. 
+
+## 1) Median (LAD) Regression 
+
+Least Absolute Deviation or LAD is the sum of absolute deviations. It is also known as median regression. To implement median regression, we can set the quartile at $0.5$. 
+
+We use the regression models mentioned in Section 6.2 of the paper, to recreate tables 1A and 2A. 
+``` {r warning=FALSE}
+
+# First median regression (Table 1.A)
+
+#tau=0.5 for the 50th Quantile. 
+qreg.T1A <- rq(log(wage) ~ education + experience + I(experience^2) + ethnicity, 
+               data = CPS1988, tau = 0.5)
+T1A <- summary(qreg.T1A)$coefficients[c(5,2,3,4,1),c(1,3)]
+#print(T1A)
+kable(T1A)
+
+# Second median regression (Table 2.A)
+qreg.T2A <- rq(log(wage) ~ education + experience + I(experience^2) + I(experience^3) 
+               + I(experience^4) + ethnicity,data = CPS1988, tau = 0.5)
+T2A <- summary(qreg.T2A)$coefficients[c(7,2,3,4,5,6,1),c(1,3)]
+#print(T2A)
+kable(T2A)
+```
+
+
+## 2) Compare results with paper 
+
+For the first model which is the Mincer type model, we see that the estimates are same till the $4th$ decimal place. However, there are some exception for the t-values vary a lot. For race, education and intercept the variation is $2-4$ units, however for the experience and $experience^2$ terms it varies by 10-12 units. This due to the difference in method of t-value calculation and assumptions as mentioned in Section 6.4.
+
+For the second model which is the quartic model, we see similar precision  for the estimate column (i.e., same till the 4th decimal place). Again, the t-vales a lot for the experience and its polynomials, compared to race, education and intercept. The reason is the as same as mentioned above.
+
+
+## 3) What does the regression summary mean?
+
+The regression summary indicates the relationship of log wages to that of the independent variable in the two respective models. This is called "Log-Level Regression", where the log of y is regressed over raw values of x [4]. This means that the wage is a percent change of the coefficients raised to the power of $e$. So an $x=0.093462$ increase in experience is $e^x= 1.0979\%$  increase in wages. Again with t-vale we get the variable which is most significant to our model. So, in Table 1A with t-value as $80$ experience has the highest significance in the Minser model and education in quartic model.
+
+\break
+
+# Section 2
+
+Before we move ahead with the story telling of the data, we need to implement the $20-60-20$ rule and partition the data into 3 parts. The data is divided as follows:
+
+``` {r warning=FALSE}
+row.nos <- rep(1:5, length.out = nrow(CPS1988))
+
+# Create eval and training and test cases
+CPSeval <- CPS1988[row.nos == 1, ]            #20% of Data for Evaluation
+
+CPStrain <- CPS1988[row.nos != 1 & row.nos != 5,]  #60% of Data for Training
+
+CPStest <- CPS1988[row.nos == 5, ]            #20% of Data for Testing
+
+######################################################################################
+
+CPStrain.for.Model <- CPS1988[row.nos != 5,]  #80% of Data for Model Training. 
+                                #This basically a combination on the first 20% and 60%
+
+```
+
+## 1) Histogram 
+
+The first thing before doing any kind of analysis is to plot Histograms of the data so that have the essence of the distribution on the variables. To calculate the **bin width** we consider the Freedman-Diaconis rule. However, for the education histogram we can consider a bin width with sequence of 1 years, as the FD rule give bins of float values.
+
+
+``` {r, fig.align='center', fig.width=8, fig.height=4}
+
+hist(CPSeval$wage, breaks='FD',
+     xlim   = c(min(CPSeval$wage), max(CPSeval$wage)),  
+     #ylim   = c(),  # the y axis ranges from 0 to 15
+     main   = "Histogram of weekly wages", 
+     xlab = "Weekly wage ($)")
+rug(jitter(CPSeval$wage))
+```
+For the histogram of weekly wages is skewed to the right. There is a huge collection of data points for wages $\leq \$1000$ with a few exception of men with $\geq \$4000$ wages. The wages on the lower end of the scale are quite bumpy which steadily declines from $\$800$. However there is a particular bump in frequency near $\$2400$, and immediately drops to nearly single digits. This which shows that there is some biasness in data pool for that particular wage or maybe it is a issue of truncation. Due to this vast distribution of wages, it is better that we scale the wages in log terms, as shown in the next histogram. 
+
+``` {r, fig.align='center', fig.width=8, fig.height=4}
+hist(log(CPSeval$wage), breaks='FD',
+     xlim   = c(min(log(CPSeval$wage)), max(log(CPSeval$wage))),  
+     #ylim   = c(),  # the y axis ranges from 0 to 15
+     main   = "Histogram of log of weekly wages",  
+     xlab = "Log of Weekly wage")
+```
+The histogram for log of weekly wage looks different with very less skewness. However, we still see few outliers at the right tail. This shows that by using log of the wages we still preserves the tail end data, and can be prospectively used in the model. 
+
+``` {r, fig.align='center', fig.width=8, fig.height=4}     
+hist(CPSeval$education, breaks = 'FD', #seq(0,max(CPSeval$education),by=1)
+     xlim   = c(min(CPSeval$education), max(CPSeval$education)),  
+     #ylim   = c(),  # the y axis ranges from 0 to 15
+     main   = "Histogram of Education",  
+     xlab = "Education (years)")
+```
+The histogram for education shows a fat right tail which means that there is a fair amount of men with high education. The histogram shows a mode at $12 years$; which implies that a majority of men in the data set are literate and have completed high school. While the long left tail $\leq 11$ signify school dropouts at different ages. 
+
+``` {r, fig.align='center', fig.width=8, fig.height=4}
+hist(CPSeval$experience, breaks='FD',
+     xlim   = c(min(CPSeval$experience), max(CPSeval$experience)),  
+     ylim   = c(0,400),  # the y axis ranges from 0 to 15
+     main   = "Histogram for Experience",  #  Suppress main title
+     xlab = "Experience (years)")
+```
+In the histogram for experience shows a well distribution, with the bulk in the $2-20 years$. However, there are few observations with negative value of experience, which doesn't make sense. It may be due to the way they have calculated the experience, which is $Age-years of schooling-6$. So to make sense of the data I went a step ahead and saw the distribution for the education for men with negative experience.
+
+
+
+## 2) Scatterplot
+
+The first scatterplot is for Wages on Education.
+```{r, fig.align='center', fig.width=8, fig.height=4}
+
+#PLot nothing only the axis 
+plot(-100, -100, 
+     xlim = c(min(CPSeval$education), max(CPSeval$education)),
+     ylim = c(0, max(CPSeval$wage)),
+     type="n",
+     ylab = "Weekly wage ($)",
+     xlab = "Education (years)",
+     main = "Scatterplot of education and weekly wage")
+
+#Plot Points with Jitter 
+points(jitter(wage) ~ education,
+       data = CPSeval,
+       pch  = 21,  # pch chooses the point character
+       cex = 1.5,
+       bg = "grey",
+       col  = rgb(0, 0, 0, .2))
+abline(lm(wage ~ education, data = CPSeval),col="red",lwd=3)
+```
+From the figure we can see that one cannot clearly interpret the data due to the large distribution of wages and a few high wage outliers. The regression line is slightly slanted upwards, but to have a better look we conduct a second polt which takes the log value of wages instead.
+
+```{r, fig.align='center', fig.width=8, fig.height=4}
+
+#PLot nothing only the axis 
+plot(-100, -100, 
+     xlim = c(min(CPSeval$education), max(CPSeval$education)),
+     ylim = c(0, max(log(CPSeval$wage))),
+     type="n",
+     ylab = "Log of Weekly wage ($)",
+     xlab = "Education (years)",
+     main = "Scatterplot of education and weekly log wage")
+
+#Plot Points with Jitter 
+points(jitter(log(wage)) ~ education,
+       data = CPSeval,
+       pch  = 21,  # pch chooses the point character
+       cex = 1.5,
+       bg = "grey",
+       col  = rgb(0, 0, 0, .2))
+abline(lm(log(wage) ~ education, data = CPSeval),col="red",lwd=3)
+```
+
+The second scatterplot is for Log of Wages on education, which is clearer compared to the first plot. This plot shows that higher education contributes to the high variation in wages. The regression lines is pulled upwards, this shows that higher years of education signals higher weekly wages. 
+
+The third scatterplot is for wages on experience. 
+```{r, fig.align='center', fig.width=8, fig.height=4}
+
+#PLot nothing only the axis 
+plot(-100, -100, 
+     xlim = c(min(CPSeval$experience), max(CPSeval$experience)),
+     ylim = c(0, max(CPSeval$wage)),
+     type="n",
+     ylab = "Weekly wage ($)",
+     xlab = "Experience (years)",
+     main = "Scatterplot of experience and weekly wage")
+
+#Plot Points with Jitter 
+points(jitter(wage) ~ experience,
+       data = CPSeval,
+       pch  = 21,  # pch chooses the point character
+       cex = 1.5,
+       bg = "grey",
+       col  = rgb(0, 0, 0, .2))
+abline(lm(wage ~ experience, data = CPSeval),col="red",lwd=3)
+```
+Similar to the education plot, it is hard to make sense of the data as the wages are so closly distributed. The regression line represent almost flat line.
+
+```{r, fig.align='center', fig.width=8, fig.height=4}
+
+#PLot nothing only the axis 
+plot(-100, -100, 
+     xlim = c(min(CPSeval$experience), max(CPSeval$experience)),
+     ylim = c(0, max(log(CPSeval$wage))),
+     type="n",
+     ylab = "Weekly wage ($)",
+     xlab = "Experience (years)",
+     main = "Scatterplot of experience and weekly wage")
+
+#Plot Points with Jitter 
+points(jitter(log(wage)) ~ experience,
+       data = CPSeval,
+       pch  = 21,  # pch chooses the point character
+       cex = 1.5,
+       bg = "grey",
+       col  = rgb(0, 0, 0, .2))
+abline(lm(log(wage) ~ experience, data = CPSeval),col="red",lwd=3)
+```
+From the 4th plot it is clear that the regression line is pulled upwards, i.e., higher experience meands higher wages. 
+
+
+## 3) Compare to Normal Distribution
+
+To compare it to normal distribution we draw a QQ Plot; not sorted plot since the size of the data will be a factor. We consider a normal distribution with the same mean and sd as that of the data. 
+
+For positioning of quartile I used the formula $\frac {k_i -0.5} {n}$ and algorithm type 5.
+
+```{r, fig.align='center', fig.width=8, fig.height=4}
+
+ndraws=1000
+norm.wages <- rnorm(ndraws, mean(CPSeval$wage), sd(CPSeval$wage))
+
+wages.q <- quantile(CPSeval$wage,probs = (seq(1, ndraws, 1) - .5)/ndraws, type = 5)
+norm.wages.q <- quantile(norm.wages,probs = (seq(1, ndraws, 1) - .5)/ndraws, type = 5)
+
+# create boundaries for plot
+min.q <- floor(min(wages.q, norm.wages.q))
+max.q <- ceiling(max(wages.q, norm.wages.q))
+
+# create qqplot
+plot(norm.wages.q, wages.q,
+     xlim = c(min.q, max.q),
+     ylim = c(min.q, max.q),
+     ylab = "Quantiles of CSP Data Wages",
+     xlab = "Quantiles of normal draws",
+     pch = 21,
+     col = rgb(0, 0, 0, 0.4))
+abline(a=0, b=1,col="red")
+```
+
+From the figure it is certain that the distribution of wages is not normal, as it does not fall in with the red line. It seems to show a non-linear pattern; which hints towards a log-normal distribution. So, we do the same with log of wages.
+
+
+```{r, fig.align='center', fig.width=8, fig.height=4}
+
+ndraws=10000
+norm.logwages <- rnorm(ndraws, mean(log(CPSeval$wage)), sd(log(CPSeval$wage)))
+
+logwages.q <- quantile(log(CPSeval$wage),probs = (seq(1, ndraws, 1) - .5)/ndraws, type = 5)
+norm.logwages.q <- quantile(norm.logwages,probs = (seq(1, ndraws, 1) - .5)/ndraws, type = 5)
+
+# create boundaries for plot
+min.q <- floor(min(logwages.q, norm.logwages.q))
+max.q <- ceiling(max(logwages.q, norm.logwages.q))
+
+# create qqplot
+plot(norm.logwages.q, logwages.q,
+     xlim = c(min.q, max.q),
+     ylim = c(min.q, max.q),
+     ylab = "Quantiles of CSP Data Wages",
+     xlab = "Quantiles of normal draws",
+     pch = 21,
+     col = rgb(0, 0, 0, 0.4))
+abline(a=0, b=1,col="red")
+```
+In contrast to to the last figure, the wage data distribution looks like a normal distribution after the log transform, thus a non-linear transformation of the normal distribution (causing skew) [Lecture Notes].
+
+
+## 4) Regression Residuals
+
+Another way to see if the conditional distribution story works is to look at the distribution of the regression residuals. Residuals is the difference between the observed value (i.e., $log(wage)$) and the predicted values (i.e., $\hat y$). We draw a QQPlot for the residuals for Tables 1A and 2A. The red lines in the graph is the regression line, and the dotted red lines are the $95\%$ confidence intervals.
+
+```{r, fig.align='center', fig.width=8, fig.height=8}
+
+lreg.T1A <- lm(log(wage) ~ education + experience + I(experience^2) + ethnicity, data = CPSeval)
+
+qqPlot(lreg.T1A,
+       main = "Table 1A regression residuals",
+       pch  = 21,
+       id.n = 3,
+       cex = 0.5,
+       col  = rgb(0, 0, 0, .5))
+abline(a=0, b=1,col="blue",lwd=3)
+```
+
+
+```{r, fig.align='center', fig.width=8, fig.height=8}
+
+lreg.T2A <- lm(log(wage) ~ education + experience + I(experience^2) + 
+                 I(experience^3) + I(experience^4) +
+                  ethnicity, data = CPSeval)
+
+qqPlot(lreg.T2A,
+       main = "Table 2A regression residuals",
+       pch  = 21,
+       id.n = 3,
+       cex = 0.5,
+       col  = rgb(0, 0, 0, .5))
+abline(a=0, b=1,col="blue",lwd=3)
+```
+
+The residuals are larger in the lower and higher ends of the data, compared to what we would expect from a t-distribution. It is overpredicted at the left and underpredicted at the right.
+
+There seems to be some prominent outliers which falls outside the prediction models (red line). The outlier are numbered in the graph (which is the row number). The details for the outliers are as follows:
+```{r}
+outliersStat <- CPS1988[c(13731,26736,18386),]
+kable(outliersStat)
+```
+
+Basically the outliers in this data are 2 men with very low wage, who are probably in school and working part time. The third outlier is a person who is a school dropout and is earning an exorbitant wage. This can be considered as Outlier of Type B, which has high leverage and low discrepency. 
+
+Median regression uses IQR while linear regression uses standard deviation. Therefore, median regression is better for this data as there are outliers.
+
+
+## 5) Backcasting and Cross-validation
+
+In this section we try to build good predictors for the observed data, that is the minimizing the residuals. To do so forcasting is a good tool for testing our model. 
+``` {r, warning=FALSE}
+
+# Reusing the quantile regression models from Section 1
+
+# find min and max values for plot dimensions
+pre <-predict(qreg.T1A, CPSeval)
+min.b <- floor(min(log(CPSeval$wage), pre)) 
+max.b <- ceiling(max(log(CPSeval$wage), pre)) 
+
+# plot the backcast
+plot(pre,log(CPSeval$wage),
+     xlim = c(min.b, max.b),
+     ylim = c(min.b, max.b),
+     ylab = "Log of Weekly wage",
+     xlab = "Predicted Log of Weekly wage",
+     main = "Backcasting of log of weekly wages using Table 1A")
+abline(a=0, b=1,col="red",lwd=3)
+
+```
+
+We now move on to crossvalidation, i.e., the best guess at what the new data will look like with the exsisting data [Lecture Notes]. For crossvalidation I select 3 models. 
+
+1) Model 1 is basiaclly the same as Table 1.A, i.e., the Minser Model.
+2) Model 2 is a modified version of Table 2.A. I felt that since it considers the quartic of the experience, it should also consider the interaction of race with the experience.
+3) Model 3 will consider the square terms of education and experience, the interaction of race with education and experience, and the geographical parts and part-time options.
+
+For a 5 fold crossvalidation I get the following average MSEs.
+``` {r, warning=FALSE}
+
+crossvalidate <- function(n){
+nfolds <- n
+case.folds <- rep(1:nfolds, length.out = nrow(CPStrain))
+
+Model1 <- c()
+Model2 <- c()
+Model3 <- c()
+
+for (fold in 1:nfolds) {
+
+  # Create training and test cases
+  train <- CPStrain[case.folds != fold, ]
+  test <- CPStrain[case.folds == fold, ]
+  
+  #train Model
+  train1 <- rq(log(wage) ~ education + experience + I(experience^2) + ethnicity,
+                            data = train, tau=0.5)
+  train2 <- rq(log(wage) ~ education + experience + I(experience^2) + 
+                            I(experience^3) + I(experience^4) + ethnicity*experience 
+                              + ethnicity, data = train, tau=0.5)
+  train3 <- rq(log(wage) ~ education + I(education^2) + experience + I(experience^2) 
+                            + ethnicity + ethnicity*education + ethnicity*experience + smsa + 
+                              region + parttime, data = train, tau=0.5)
+
+  
+  # Generate test MSEs
+  test1 <- (log(test$wage) - predict(train1, test))^2
+  rMSEtest1 <- sqrt(sum(test1) / length(test1))
+  
+  test2 <- (log(test$wage) - predict(train2, test))^2
+  rMSEtest2 <- sqrt(sum(test2) / length(test2))
+  
+  test3 <- (log(test$wage) - predict(train3, test))^2
+  rMSEtest3 <- sqrt(sum(test3) / length(test3))
+  
+  # Append the rMSE from this iteration to vectors
+  Model1 <- c(Model1, rMSEtest1)  
+  Model2 <- c(Model1, rMSEtest2) 
+  Model3 <- c(Model1, rMSEtest3) 
+}
+
+# Average the MSEs
+Model1.avg <- mean(Model1)
+Model2.avg <- mean(Model2)
+Model3.avg <- mean(Model3)
+
+return(c(Model1.avg, Model2.avg, Model3.avg))
+}
+
+
+MSE.result.5fold <- crossvalidate(5)
+print("      Model 1        |       Model 2    |      Model 3")
+print(paste0(MSE.result.5fold[1]," | ",MSE.result.5fold[2]," | ",MSE.result.5fold[3]))
+
+```
+
+As we can see that Model 2 and Model 3 have a lower rMSE compared to Model 1. However, to make my argument stronger I  compare the three models and how the rMSE varies with the number of folds. I Iter my code for different values of folds.
+``` {r, warning=FALSE}
+
+# Set the sequence of folds to try
+k <- c(seq(from = 2, to = 20, by = 2),30,40,50)
+
+# Allocate empty vectors to store results
+Model1.result <- c()
+Model2.result <- c()
+Model3.result <- c()
+
+for(folds in k){
+  MSE.result.nfolds <- crossvalidate(folds)
+  Model1.result <- c(Model1.result, MSE.result.nfolds[1])
+  Model2.result <- c(Model2.result, MSE.result.nfolds[2])
+  Model3.result <- c(Model3.result, MSE.result.nfolds[3])
+}
+```
+
+``` {r, fig.align='center', fig.width=5, fig.height=5}
+
+plot(k, Model1.result, col = "blue", type = "b",
+     ylim = c(min(Model1.result, Model2.result, Model3.result),
+               max(Model1.result, Model2.result, Model3.result)),
+     ylab = "rMSE",
+     #xlim = c(0,21),
+     xlab = "Folds (k)",
+     main = "Variation in cross-validated rMSE of the 3 Models")
+
+points(k, Model2.result, col = "red")
+lines(k, Model2.result, col = "red")
+
+points(k, Model3.result, col = "green")
+lines(k, Model3.result, col = "green")
+
+# Add legend to plot
+legend(40, .58,  # legend location in x-y coordinates
+       c("Model1", "Model2", "Model3"),  # legend labels in order
+       col  =  c("blue", "red", "green"),  # colors for legend labels in order
+       pch = 19)
+
+```
+
+The above graph shows that the rMSE is noisy for Model 1 & 2 as the folds increase. In model 3, there is a steady increase in rMSE with increase in folds, however after fold 10 the rMSE becomes noisy. But, the average rMSE for Model 3 is way below Model 1 and 2, so Model 3 is so far the best. For Model 1 and 2, the rMSEs seems to be intertwined. I will move forward with all three models. 
+
+
+Finally, we take the first $80\%$ of the data and train our models and test it with the last $20\%$ of the data.
+``` {r, warning=FALSE}
+
+#rMSE for Model 1
+Model1.train <- rq(log(wage) ~ education + experience + I(experience^2) 
+                   + ethnicity, data = CPStrain.for.Model)
+Model1.test <- (log(CPStest$wage) - predict(Model1.train,CPStest))^2
+Model1.rMSEtest <- sqrt(sum(Model1.test) / length(Model1.test))
+
+
+
+#rMSE for Model 2
+Model2.train <- rq(log(wage) ~ education + experience + I(experience^2) 
+                   + I(experience^3) + I(experience^4) + ethnicity*experience + ethnicity, 
+                   data = CPStrain.for.Model)
+Model2.test <- (log(CPStest$wage) - predict(Model2.train,CPStest))^2
+Model2.rMSEtest <- sqrt(sum(Model2.test) / length(Model2.test))
+
+
+
+#rMSE for Model 3
+Model3.train <- rq(log(wage) ~ education + I(education^2) + experience + I(experience^2) 
+                            + ethnicity + ethnicity*education + ethnicity*experience + smsa 
+                            + region + parttime, data = CPStrain.for.Model)
+Model3.test <- (log(CPStest$wage) - predict(Model3.train,CPStest))^2
+Model3.rMSEtest <- sqrt(sum(Model3.test) / length(Model3.test))
+
+
+print(paste0("Model 1 rMSE: ",Model1.rMSEtest))
+print(paste0("Model 2 rMSE: ",Model2.rMSEtest))
+print(paste0("Model 3 rMSE: ",Model3.rMSEtest))
+
+```
+
+Finally Model 3 turns out to have the least rMSE even for the forcasting process. While Model 2 performs fairly better than Model 1. 
+
+
+## 6) Statistical inference
+
+To draw any statistical inference is difficult due to the CPS method of collecting data and authors rigid selection of data.
+
+CPS does select candidates in random but participants can opt-out or attribute some biases in the data. Census bureau often simulates the data based on assumptions, if they are unable to get that. Thus has technical challenges. Moreover, the authors have selected a subset of data, from a particular population of males aged $18-70$; with income greater than $\$50$ and who are not self-employed or working without pay. Agin they have a rigid selection on the race, where they observe only Caucasian and African-American men. 
+
+The actual data might have been random, but the lack of random sampling by the authors we cannot describe any statistical inference. Therefore no profit finding confidence intervals.
+
+ 
+## 7) Causal Inference
+
+To draw causal inference we need to understand the counterfactuals, i.e., manipulating that data. The data on the contrary donot have much randomness in the data, and try to prove direct relationship between the varaible and the wages. The data shows a causal relation of race, education and experience on the wages. However, it is difficult to say that there is a common cause, since the random assignment has not been taken care of in the data.
+
+## 8) Optional 
+
+### Data Summary
+
+The eCDF plot for log(wages) shows a steady graph. It gives an idea about the mean of the wages which is at nearly 6.2 (on log scale). We can trace the $log(wage)$ to the probability of getting that wage. From the graph we can see getting a wage higher than 7 is less (it is a CDF plot so it will be $1- eCDF^{-1}(wage)$).
+
+``` {r}
+plot(ecdf(log(CPSeval$wage)),
+     xlab = "",
+     ylab = "Cumulative probability",
+     #xlim = c(-1, 1),
+     main = "",
+     verticals = TRUE,
+     do.points = FALSE,
+     lwd = 2)
+```
+
+### Conditional Distribution
+
+Since the data has outliers it will be interesting to see the Cooks Distance, which recalculates the regression after dropping an observation (in this case outliers). It looks at how much excluding the observation changes the predictions for all observations [Lecture Notes]. I conducted the Cook's Distance for the three outliers.
+
+```{r}
+Model3.CookD <- lm(log(wage) ~ education + I(education^2) + experience + I(experience^2) 
+                   + ethnicity + ethnicity*education + ethnicity*experience + smsa + 
+                       region + parttime, data = CPStrain.for.Model)
+
+print(paste0("CooksD for Outlier Nos-13731: ",cooks.distance(Model3.CookD)[13731]))
+#print(paste0("CooksD for Outlier Nos-26736: ",cooks.distance(Model3.CookD)[26736]))
+print(paste0("CooksD for Outlier Nos-18386: ",cooks.distance(Model3.CookD)[18386]))
+```
+
+However, the Cook's distance is very small but it will significantly improve the MSE by nearly $10\%$ percentage. 
+```{r, warning=FALSE}
+CPStrain.for.Model.drop <- CPStrain.for.Model[-c(13731),]
+Model3.CookD <- rq(log(wage) ~ education + I(education^2) + experience + I(experience^2) 
+                   + ethnicity + ethnicity*education + ethnicity*experience + smsa + 
+                       region + parttime, data = CPStrain.for.Model.drop)
+Model3.test <- (log(CPStest$wage) - predict(Model3.CookD,CPStest))^2
+Model3.rMSEtest.Cook <- sqrt(sum(Model3.test) / length(Model3.test))
+print(Model3.rMSEtest.Cook)
+print(paste0("Improvement if we drop data Nos-13731:",
+             signif(((Model3.rMSEtest-Model3.rMSEtest.Cook)/Model3.rMSEtest)*100,3),"%"))
+```
+
+```{r, warning=FALSE}
+CPStrain.for.Model.drop <- CPStrain.for.Model[-c(18386),]
+Model3.CookD <- rq(log(wage) ~ education + I(education^2) + experience + I(experience^2) 
+                   + ethnicity + ethnicity*education + ethnicity*experience + smsa + 
+                       region + parttime, data = CPStrain.for.Model.drop)
+Model3.test <- (log(CPStest$wage) - predict(Model3.CookD,CPStest))^2
+Model3.rMSEtest.Cook <- sqrt(sum(Model3.test) / length(Model3.test))
+print(Model3.rMSEtest.Cook)
+print(paste0("Improvement if we drop data Nos-18386:",
+             signif(((Model3.rMSEtest-Model3.rMSEtest.Cook)/Model3.rMSEtest)*100,3),"%"))
+```
+#### Note rmarkdown gave wrong Impovement results. If you run the chunk you will get 9.95%
+
+## Github Link
+
+
+
+## Citattion 
+
+[1] Bierens, Herman J., and Donna K. Ginther. "Integrated Conditional Moment testing of quantile regression models." Empirical Economics (2001) 26: 307-324
+
+[2] https://www.census.gov/cps/data/
+
+[3] https://www.cscu.cornell.edu/news/statnews/stnews70.pdf
+
+[4] http://home.wlu.edu/~gusej/econ398/notes/logRegressions.pdf
+
+[5] Lecture Notes
