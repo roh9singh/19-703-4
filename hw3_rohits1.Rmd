@@ -1,0 +1,552 @@
+---
+title: "HW3"
+author: "Rohit Singh"
+date: "3/9/2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r lib, include=FALSE , echo=FALSE,warning=FALSE}
+library(knitr) 
+library(AER)
+library(car)
+library(mgcv)
+library(lmtest)
+library(sandwich)
+#library(cvTools)
+
+# load data
+data(HousePrices)
+```
+
+
+# Section 1
+
+In this Section we will try to replicate the data as presented in the paper [1]. The paper aims at testing different parametric regression models on house price data present in the AER library. The data (as mentioned in section 3) is from the Windsor and Essex County Real Estate Board (Canada) for 546 houses sold during June-September of 1987. The data includes information of variables and dummy variables as shown in table below [Table 1 in paper].
+
+* P: Is the sale price of the house in $
+* LOT: Lot size of the property in square feet
+* BDMS: Number of Bedrooms
+* REC: Binary variable if the house has a recreational room or not
+* STY: Number of stories excet basement
+* FFIN: Binary variable if the house has a furnished basement or not
+* GHW: Binary variable if the house uses gas for water heatingh 
+* CA: Binary variable if the house has a central air conditioning 
+* GAR: Number of garge places
+* DRV: Binary variable if the house has a drive through 
+* REG: Binary variable if the house is located in Riverside or South windsor, which is the preffered neighbourhood.
+* FB: Number of full bathroom
+
+## 1) Data Replication
+In the first part of this section we try to recreater the Table II of the paper which uses a Benchmark model with 12 variables. In the benchmark model they donot includ number of rooms as it is highly colinear with the BDMS,FB,FFIn and REC, which is present in the model. I also calcculate the sum of the squared estimated errors or residual sum of squares (SSR), R-squared and Adjusted R-squared as shown in table [2].
+
+``` {r warning=FALSE}
+# First replication of regression from Table II 
+reg.T2 <- lm(log(price) ~ driveway + recreation + fullbase + gasheat + aircon + garage + 
+             prefer +log(lotsize) + log(bedrooms) + log(bathrooms) + log(stories), 
+             data=HousePrices)
+
+table.II <- summary(reg.T2)$coefficients[, c(1,3)]
+
+# calculate SSR 
+T2.SSR <- sum(reg.T2$residual^2)
+
+# Total sum of squares or SST
+T2.SST <- sum((log(HousePrices$price) - mean(log(HousePrices$price)))^2) 
+
+# R-squared
+T2.R.sqr <- 1 - (T2.SSR/T2.SST)
+
+# Adjusted R-squared
+# According to the formula in [2] k+1=nos of variable (12 in this case)
+T2.adj.R.sqr <- 1-(1-T2.R.sqr)*((nrow(HousePrices)-1)/((nrow(HousePrices)-11-1)))
+
+table.II.extra <- rbind(T2.SSR,T2.R.sqr,T2.adj.R.sqr)
+rownames(table.II.extra) <- c("SSR","R^2", "Adj R^2")
+
+kable(table.II, digits=3)
+kable(table.II.extra, digits=3)
+```
+
+In the second model (with RESET test) the authors propose a simliar model to the benchmark, but instead they donot log transform the variables BDMS, FB and STY. However, they take the log transform for LOT. 
+``` {r warning=FALSE}
+reg.T3 <- lm(log(price) ~ driveway + recreation + fullbase + gasheat + aircon + garage + 
+             prefer + log(lotsize) + bedrooms + bathrooms + stories, 
+             data = HousePrices)
+table.III <- summary(reg.T3)$coefficients[, c(1,3)]
+
+# calculate SSR 
+T3.SSR <- sum(reg.T3$residual^2)
+
+# Total sum of squares or SST
+T3.SST <- sum((log(HousePrices$price) - mean(log(HousePrices$price)))^2) 
+
+# R-squared
+T3.R.sqr <- 1 - (T3.SSR/T3.SST)
+
+# Adjusted R-squared
+# According to the formula in [2] k+1=nos of variable (12 in this case)
+T3.adj.R.sqr <- 1-(1-T3.R.sqr)*((nrow(HousePrices)-1)/((nrow(HousePrices)-11-1)))
+
+table.III.extra <- rbind(T3.SSR,T3.R.sqr,T3.adj.R.sqr)
+rownames(table.III.extra) <- c("SSR","R^2", "Adj R^2")
+
+kable(table.III, digits=3)
+kable(table.III.extra, digits=3)
+```
+Table II and III seems to be very precisely replicated. 
+
+## 2) Interpret the coefficients
+
+In both of the regression models the price is logged, while the independent variables DRV and LOT is question are level and logged respectively. This makes the comparision a "log-level" and "log-log" respectively.Therefore, for DRV (which is a log-level) a $\%$ change in price is approximately equal to 100*Coefficient(DRV). For both models the coefficient for DRV is $0.11$. To analyze the dummy variable DRV, we can say that sale price of a house with driveway ($DRV=1$) is $11\%$ more than a house with no drveway ($DRV=1$).However, for LOT (which is a log-log comparison) a $1\%$ cahnge in LOT will lead to a $Coefficient(LOT) \%$ change in price of the house. For both models the coefficient for LOT isn't same, $0.313$ and $0.303$ respectively. So, a house $1\%$ larger than anyother house will cost $0.313\%$ and $0.303\%$ more for the models respectively. 
+
+Out of the 12 variables there are 6 binary variables which donot require any form of mean-centering or standerdization. Out of the other 6 variables having a $0$ value for GAR, BDMS and FB makes sense, as it shows the absense of those features in that house. If $BDMS=0$ it might mean its more like a studio, and if $FB=0$ it means that it might not be a "full" bath (its not clearly explained in the data description). Moreover, the variables STY,BDMS,FB,GAR have few discrete values so standerdizing them will make it hard to compute. The variable P and LOT can be mean centered as these rae continuous values, and a $0$ value doesn't make sense. 
+
+
+\break 
+# Section 2
+
+In this section we go ahead with the 5-story of the data. Before we move ahead with the story telling of the data, we need to implement the $20-60-20$ rule and partition the data into 3 parts. The data is divided as follows:
+
+``` {r warning=FALSE}
+row.nos <- rep(1:5, length.out = nrow(HousePrices))
+row.nos <- sample(row.nos)
+
+# Create eval and training and test cases
+HPeval <- HousePrices[row.nos == 1, ]            #20% of Data for Evaluation
+
+HPtrain <- HousePrices[row.nos != 1 & row.nos != 5,]  #60% of Data for Training
+
+HPtest <- HousePrices[row.nos == 5, ]            #20% of Data for Testing
+
+######################################################################################
+
+HPtrain.for.Model <- HousePrices[row.nos != 5,]  #80% of Data for Model Training. 
+                                #This basically a combination on the first 20% and 60%
+
+```
+
+## 1) Histogram 
+
+The first thing before doing any kind of analysis is to plot Histograms of the data so that have the essence of the distribution on the variables. To calculate the **bin width** we consider the Freedman-Diaconis rule.
+
+``` {r warning=FALSE, fig.align='center', fig.width=8, fig.height=4}
+
+hist(HPeval$price, breaks='FD',
+     xlim   = c(10000,150000),  
+     ylim   = c(0,25),
+     main   = "Histogram of House Prices", 
+     xlab = "House Prices ($)")
+rug(jitter(HPeval$price))
+```
+For the histogram of House prices is skewed towards right. There are 4-5 data points which have a high price value. However, it is very difficult to draw any conclusion with $20\%$ of the data roughly 110 values. Still with this limited data set it seems to represent a log-normal, with a large concentration of values around $\$40,000-\$50,000$ and a long tail that extends out to $\$140,000$.
+
+Therefor for the second histogram we do a log transform so that the distibution looks normal.
+``` {r warning=FALSE, fig.align='center', fig.width=8, fig.height=4}
+
+hist(log(HPeval$price), breaks='FD',
+     xlim   = c(log(20000),12.5),  
+     ylim   = c(0,30),
+     main   = "Histogram of House Log Prices", 
+     xlab = "House Log Prices ($)")
+rug(jitter(log(HPeval$price)))
+```
+
+The following histogram is for the lotsize, which varies from 1,700 sq.ft to 12,000 sq.ft. Most of the houses are concentrated in the 4000-6000 sq.ft range. The historgram suggests the the lot size has a log-normal distribution, and that it will be normal if we transfer it into log. The validation will be done with Box-Tidwell which calculates the exact value for the lamda for lotsize.
+
+``` {r, warning= FALSE, fig.align='center', fig.width=8, fig.height=4}
+
+hist(HPeval$lotsize, breaks='FD',
+     xlim   = c(min(HPeval$lotsize), 15000),  
+     ylim   = c(0,30),  
+     main   = "Histogram of House Lot Sizes", 
+     xlab = "House Lot sizes (sq.ft)")
+rug(jitter(HPeval$lotsize))
+```
+
+Similarly, we plot the histograms for the variables BDMS, FB and STY. The bins for the hitorgrams are quite big, this is mainly due to the fact that these variables have a distinct number of values. The plot for BDMS shows that most of the houses have about 3 bedrooms, while the plot for FB shows most houses in the data set have 1 full-bathrooms; with few exceptions for 5 bedrooms and 4 bathrooms. It is had to comment if the distribution for the BDMS and FB are normal or log-normal due to small data size. Howevere, by the preliminary looks it seems that the BDMS has a normal distribution and FB has a log-normal. For the plot with stories, most of the houses have 1-2 stories with a moderate of 3-4 storie building. The plot neither repreents a normal nor log-normal.
+
+``` {r, warning=FALSE, fig.align='center', fig.width=8, fig.height=4}
+
+hist(HPeval$bedrooms,breaks='FD',
+     #xlim   = c(min(HPeval$), 15000),  
+     ylim   = c(0,70),  
+     main   = "Histogram of Number of Bedrooms", 
+     xlab = "Nos. of Bedrooms")
+rug(jitter(HPeval$bedrooms))
+
+hist(HPeval$bathrooms,breaks='FD',
+     #xlim   = c(min(HPeval$), 15000),  
+     #ylim   = c(0,30),  
+     main   = "Histogram of Number of Full Bathrooms", 
+     xlab = "Nos. of Full Bathrooms")
+rug(jitter(HPeval$bathrooms))
+
+hist(HPeval$stories,breaks='FD',
+     #xlim   = c(min(HPeval$), 15000),  
+     ylim   = c(0,60),  
+     main   = "Histogram of Number of Stories", 
+     xlab = "Nos. of Storiess")
+rug(HPeval$stories)
+
+```
+
+## 2) Tables 
+
+To do an evaluation for a data with so many binary variables the best method is to look at them through tables. The table function tries to count the number of repetations for the binary option. In this case it will be a count for Yes and No, i.e., if a feature is present in the house or not.
+
+```{r}
+# tables
+HP.table <- rbind(table(HPeval$driveway),table(HPeval$recreation),
+                     table(HPeval$fullbase),table(HPeval$gasheat),
+                     table(HPeval$aircon),table(HPeval$prefer))
+
+rownames(HP.table) <- c("DRV", "REC", "FFIN", "GHW", "CA", "REG")
+colnames(HP.table) <- c("No", "Yes")
+
+kable(HP.table)
+```
+
+The table suggests that $94/110$ houses donot have driveways, which seems not to be an attractive feature for a higher house price. Moreover, most of the houses have donot have a recreation room, full furnished basement, heating with gas, central cooling and located in preferred locations. However, tables fail to show the overlap in the data, like, do all the 106 houses with GHW have DRV and fall in the preferred loaction or not. To look at that kind of relationship a scatterplot matrix will be helpful. 
+
+
+## 3) Gauss-Markov Assumptions for Table III
+
+The explanation for Gauss-Markov assumptions for Table III are as follows: 
+
+* Linearity in parameters: For model III all independent variables are linear. There might be problems in the independent variable such as lot-size, which might need some form of transformation. The factor variables can be a part of the linear model by making it dummy variable. 
+
+* Random sampling: It isn't clear from the data description that if the data is random or not. There are issues in that data set as it is limited to only 3 months so there can be a seasonal effect to this data. It is not clear if it includes data for a particular county or city of Windsor. Moreover, it includes the data for houses which are being sold and not the unsold ones. So, assumption of random sampling is violated.
+
+* Zero conditional mean: The third assumption tells us if there are any omitted variable biases or not. It is very difficult to have all variables factored into a model. However, we can speculate that there exists other logical variables which can cause a omitted variable bias, like, the age of the house, how close is the house to a park or a bus stop, or the quality of the furnishing and others. However, to prove that these variables will cause a omitted variable bias we need to prove that the variable is unrelated to price or that the variable is unrelated to a independent variable present in the model (like, lot-size). Since the data is based on hedonic pricing we cannot prove zero conditional mean.
+
+* No perfect collinearity: This holds because the regression didn't fall for a dummy variable trap, as R drops one of the columns if that is the case. 
+
+
+
+## 4) Jackknife residuals & Box-Cox
+
+From the JackKnife residual plot it clear that the conditional mean reamins straight, however it slightly slopes down as the fitted value increases. The residual plot shows that there are some high residual (on the negative side) as we increase the fitted values. Moreover, the varience increases we move from lower values to higher values, which is a sign of heteroskedasticity.
+
+```{r}
+reg.T3 <- lm(price ~ driveway + recreation + fullbase + gasheat + aircon + garage + 
+             prefer + log(lotsize) + bedrooms + bathrooms + stories, 
+             data = HPeval)
+
+plot(jitter(fitted(reg.T3)),  
+     jitter(rstudent(reg.T3)),
+     xlab = "Fitted Values",
+     ylab = "Jackknife Residuals",
+     main = "Plot of Jackknife residuals against fitted values")
+abline(h = 0)
+```
+
+It is clear from the residual plot that the data has heteroskedasticity, so we will try to do some form of transformation on the dependent variable so that the heteroskedasticity gets removed. To get the appropriate transform we will do a Box-Cox transform and try to predict the lamda value
+
+```{r}
+# BoxCox plot
+reg.T3.BC <- lm(price ~ driveway + recreation + fullbase + gasheat + aircon + garage + 
+             prefer + log(lotsize) + bedrooms + bathrooms + stories, 
+             data = HPeval)
+Lamda <- boxCox(reg.T3.BC,
+       family = "yjPower",
+       main = "Box-Cox transformation of house prices")  # Use the Yeo-Johnson power family
+
+BCLam <- Lamda$x[Lamda$y == max(Lamda$y)]
+print(BCLam)
+```
+According to BoxCox we see a flat maximum (log-likelihood=-1301.975) for the $95\%$ with lamda `r BCLam`. So, technically the log transform is not the best in this case but is close enough. Taking the log transform on y falls in line with our analysis with the histogram plots, where we saw a log-normal distribution for the price values. Moreover the lof transform reduces the hetroskodasticity as well, as shown in the figure below. 
+
+```{r}
+#(I(price^BCLam)-1)/BCLam
+#I(price^BCLam)
+reg.T3 <- lm(log(price) ~ driveway + recreation + fullbase + gasheat + aircon + garage + 
+             prefer + log(lotsize) + bedrooms + bathrooms + stories, 
+             data = HPeval)
+
+plot(jitter(fitted(reg.T3)),  
+     jitter(rstudent(reg.T3)),
+     xlab = "Fitted Values",
+     ylab = "Jackknife Residuals",
+     main = "Jackknife residuals for Log Transformed Model")
+abline(h = 0)
+```
+
+
+
+## 5) Component plus Residual plot 
+
+Now, we will do a similar analysis for the independent variable (here lot-size), whether to take a log transform or not as proposed in the benchmark model. To do so we see the component-residual plot for the transformed value of prices but untransformed value of lot-size.
+``` {r}
+reg.T3.CR <- lm(log(price) ~ driveway + recreation + fullbase + gasheat + aircon + garage + 
+             prefer + lotsize + bedrooms + bathrooms + stories, 
+             data = HPeval)
+crPlots(reg.T3.CR, terms="lotsize", pch = 19, col = rgb(0,0,0, .5),
+        main = "Component-residual plot for lotsize",
+        xlab = "Lot size (sq. ft.)",
+        ylab = "Component-residual for log(price)")
+```
+The above graph shows non-linearity in lot-size which is depicted by the green line. Again we see that the model does underpredict at lower and upper ends of the lot-size and overpredicts at the middle. The component residual plot suggests that the curvature is monotonic. However it is difficult to eyeball the actual relationship of the lot-size, so we use Box-Tidwell to find the actal power-function for lot-size. 
+
+```{r}
+# BoxTidwell
+BT <- boxTidwell(log(price) ~ lotsize, 
+           other.x = ~ driveway + recreation + fullbase + gasheat + aircon + 
+           garage + prefer + bedrooms + bathrooms + stories, data =HPeval)
+print(BT)
+Lamda <- BT$result[3]
+```
+Box Tidwell suggests a Lamda of `r Lamda`. However, I have noticed that the Lamda value changes drastically from $-1.6$ to $0.3$ if I re-run the code chunk where we split the data into 20-60-20. This is because that the data set is too small and sparcely located. Moreove,r the prices are hedonic so a change in smapling of the data set changes the lamda value. To draw any kind of inference on the lamda value of the lotsize will be meaningless. So I have used the lamda value as a parameter for my model. 
+
+From the component-residual plot it is certain that there is some form of non-linearity in lot-size, however it cannot be eye-balled. Moreover, with the drastic variation of the lamda value due to small data size it is hard to go ahead with the thansformation of lot size as $x^{\lambda}$. However, from our Histogram analysis we can say that the lot-size follows a log-normal distribution, so considering a log transform for the lot-size will be a better oprtion. To support the argument we draw the qqnorm for log of lot-size. The plot suggests an almost straight line which means that log can be considered as a transform for lot-size.
+
+```{r}
+qqnorm(log(HPeval$lotsize))
+```
+
+
+## 6) GAM
+
+We can also analyze the model using using the generalized additive model function (GAM). The following plot is plot of smoothing funtion of lotsize. The GAM plot supports that the lot-size needs a monotonic transform. We see a wide band on the right and a small band on the left, which means heteroskodasticity is high on the right.
+
+```{r}
+# generalized additive model 
+gam.lotsize <- gam(log(price) ~ driveway + recreation + fullbase + 
+                     gasheat + aircon + garage + prefer +
+                     s(lotsize) + bedrooms + bathrooms + stories,data=HPeval)
+
+# partial residual plot
+plot(gam.lotsize, residuals = TRUE, shade = TRUE)
+```
+
+## 7) Forecasting 
+
+We now move on to crossvalidation, i.e., the best guess at what the new data will look like with the exsisting data [Lecture Notes]. For crossvalidation I select 3 models. 
+
+1) Model 1 is basiaclly the same as Table II, i.e., the benchmark Model.
+2) Model 2 is the log model suggested by Box-Tidwell and Component-residual plot
+3) Model 3 is the semi-parametric
+
+For a 5 fold crossvalidation I get the following average MSEs.
+``` {r, warning=FALSE}
+
+crossvalidate <- function(n){
+nfolds <- n
+case.folds <- rep(1:nfolds, length.out = nrow(HPtrain))
+
+Model1 <- c()
+Model2 <- c()
+Model3 <- c()
+
+for (fold in 1:nfolds) {
+
+  # Create training and test cases
+  train <- HPtrain[case.folds != fold, ]
+  test <- HPtrain[case.folds == fold, ]
+  
+  #train Model
+  train1 <- lm(log(price) ~ driveway + recreation + fullbase + gasheat + aircon + garage + 
+             prefer +log(lotsize) + log(bedrooms) + log(bathrooms) + log(stories), 
+             data=train)
+  train2 <- lm(log(price) ~ driveway + recreation + fullbase + gasheat + aircon + garage + 
+             prefer + log(lotsize) + bedrooms + bathrooms + stories, 
+             data = train)
+  train3 <- gam(log(price) ~ driveway + recreation + fullbase + gasheat+ aircon 
+                + garage + prefer +
+               s(lotsize) + bedrooms + bathrooms + stories,data=train)
+
+  
+  # Generate test MSEs
+  test1 <- (log(test$price) - predict(train1, test))^2
+  rMSEtest1 <- sqrt(sum(test1) / length(test1))
+  
+  test2 <- (log(test$price) - predict(train2, test))^2
+  rMSEtest2 <- sqrt(sum(test2) / length(test2))
+  
+  test3 <- (log(test$price) - predict(train3, test))^2
+  rMSEtest3 <- sqrt(sum(test3) / length(test3))
+  
+  # Append the rMSE from this iteration to vectors
+  Model1 <- c(Model1, rMSEtest1)  
+  Model2 <- c(Model1, rMSEtest2) 
+  Model3 <- c(Model1, rMSEtest3) 
+}
+
+# Average the MSEs
+Model1.avg <- mean(Model1)
+Model2.avg <- mean(Model2)
+Model3.avg <- mean(Model3)
+
+return(c(Model1.avg, Model2.avg, Model3.avg))
+}
+
+
+MSE.result.5fold <- crossvalidate(5)
+print("      Model 1        |       Model 2    |      Model 3")
+print(paste0(MSE.result.5fold[1]," | ",MSE.result.5fold[2]," | ",MSE.result.5fold[3]))
+
+```
+
+As we can see that Model 2 and Model 3 have a lower rMSE compared to Model 1. However, to make my argument stronger I  compare the three models and how the rMSE varies with the number of folds. I Iter my code for different values of folds.
+``` {r, warning=FALSE}
+
+# Set the sequence of folds to try
+k <- c(seq(from = 2, to = 20, by = 2),30)
+
+# Allocate empty vectors to store results
+Model1.result <- c()
+Model2.result <- c()
+Model3.result <- c()
+
+for(folds in k){
+  MSE.result.nfolds <- crossvalidate(folds)
+  Model1.result <- c(Model1.result, MSE.result.nfolds[1])
+  Model2.result <- c(Model2.result, MSE.result.nfolds[2])
+  Model3.result <- c(Model3.result, MSE.result.nfolds[3])
+}
+```
+By varying the folds for the data we see that Model 2 and 3  both outperform model 1. Moreover Model 2 has a slightly less MSE compared to Model 3.
+
+``` {r, fig.align='center', fig.width=5, fig.height=5}
+
+plot(k, Model1.result, col = "blue", type = "b",
+     ylim = c(min(Model1.result, Model2.result, Model3.result),
+               max(Model1.result, Model2.result, Model3.result)),
+     ylab = "rMSE",
+     #xlim = c(0,21),
+     xlab = "Folds (k)",
+     main = "Variation in cross-validated rMSE of the 3 Models")
+
+points(k, Model2.result, col = "red")
+lines(k, Model2.result, col = "red")
+
+points(k, Model3.result, col = "green")
+lines(k, Model3.result, col = "green")
+
+# Add legend to plot
+legend(40, .58,  # legend location in x-y coordinates
+       c("Model1", "Model2", "Model3"),  # legend labels in order
+       col  =  c("blue", "red", "green"),  # colors for legend labels in order
+       pch = 19)
+
+```
+Finally, we take the first $80\%$ of the data and train our models and test it with the last $20\%$ of the data.
+
+``` {r, warning=FALSE}
+
+#rMSE for Model 1
+Model1.train <- lm(log(price) ~ driveway + recreation + fullbase + gasheat + aircon + garage + 
+             prefer +log(lotsize) + log(bedrooms) + log(bathrooms) + log(stories), 
+             data=HPtrain.for.Model)
+Model1.test <- (log(HPtest$price) - predict(Model1.train,HPtest))^2
+Model1.rMSEtest <- sqrt(sum(Model1.test) / length(Model1.test))
+
+
+
+#rMSE for Model 2
+Model2.train <- lm(log(price) ~ driveway + recreation + fullbase + gasheat + aircon + garage + 
+             prefer + log(lotsize) + bedrooms + bathrooms + stories, 
+             data = HPtrain.for.Model)
+Model2.test <- (log(HPtest$price) - predict(Model2.train,HPtest))^2
+Model2.rMSEtest <- sqrt(sum(Model2.test) / length(Model2.test))
+
+
+
+#rMSE for Model 3
+Model3.train <- gam(log(price) ~ driveway + recreation + fullbase + gasheat + aircon + 
+                garage + prefer +
+               s(lotsize) + bedrooms + bathrooms + stories,data=HPtrain.for.Model)
+Model3.test <- (log(HPtest$price) - predict(Model3.train,HPtest))^2
+Model3.rMSEtest <- sqrt(sum(Model3.test) / length(Model3.test))
+
+
+print(paste0("Model 1 rMSE: ",Model1.rMSEtest))
+print(paste0("Model 2 rMSE: ",Model2.rMSEtest))
+print(paste0("Model 3 rMSE: ",Model3.rMSEtest))
+
+```
+
+Finally Model 2 turns out to have the least rMSE even for the forcasting process. While Model 3 performs fairly better than Model 1. 
+
+
+## 8) Standard error estimates 
+
+The classical and the robust standard errors have been highlighted below.
+``` {r}
+reg.T3 <- lm(log(price) ~ driveway + recreation + fullbase + gasheat + aircon + garage + 
+             prefer + log(lotsize) + bedrooms + bathrooms + stories, 
+             data = rbind(HPtrain,HPtest))
+
+cla <- coeftest(reg.T3)
+cla.error <- cla[,2]
+
+robust <- coeftest(reg.T3, vcov = vcovHC(reg.T3, type = "HC0"),
+         df = df.residual(reg.T3))
+robust.error <- robust[,2]
+
+error.ratio <- robust.error/cla.error
+
+se.table <- cbind(robust.error, cla.error,error.ratio)
+kable(se.table)
+```
+
+The ratio of the errors suggests that there isn't much difference in the two forms of erros. Mostly have a ratio of 1, while some are close to 0.95. The varibles like stories and gas heats have the ratio of $0.87$ and $1.12$ which are far from the 1 mark. The more away the ratio is from 1 (on both sides) the more heterosodasticity will the variable bring in the data. However, for the Gas Heat there are very few houses with "Yes" option and for stories very less houses have a 3 to 4 stories. This is a very small portion, and we cannot say if it is heteroskodasticity since we donot have enough data. Overall the table suggests that there isn't musch issue of heteroskodasticity if we use Model2 or the model from Table III.
+
+## 9) Statistical inference and causality
+
+The data looks very promising with very few outliers. We can draw statistical inference for Windsor from June-Septmember, if we treat this data as the whole population. However, to draw statistical inference for the price range for Windsor for the months other than June-Septmember is difficult. We need more data to draw inference on if there is a seasonal effect of house prices in the city of Windsor. Moreover, this model cannot be genarilized for predicting house price effect in other cities. As there are outher factors which can be important in deciding the house prices. Like a house in Manhatton or California can be way more than the maximum house price in this data of $\$190,000$.The three models proposed in this report will not be able to fit the data from these regions. So, to genarilze either for Windsor or for any city, we need more data.
+
+For causality, it is certain from the data that there are certain house characteristics which might attribute to the house prices like Lotsized and Nos.of bedrooms. The scatter plots seems to show a nice pattern.
+```{r, fig.align='center', fig.width=8, fig.height=4}
+
+#PLot nothing only the axis 
+plot(-100, -100, 
+     ylim = c(min(log(HousePrices$price)), max(log(HousePrices$price))),
+     xlim = c(0, max(HousePrices$lotsize)),
+     type="n",
+     ylab = "House Prices ($)",
+     xlab = "Lotsize sq.ft",
+     main = "Scatterplot of Lotsize and House Prize")
+
+#Plot Points with Jitter 
+points(jitter(log(price)) ~ lotsize,
+       data = HousePrices,
+       pch  = 21,  # pch chooses the point character
+       cex = 1.5,
+       bg = "grey",
+       col  = rgb(0, 0, 0, .2))
+abline(lm(log(price) ~ lotsize, data = HousePrices),col="red",lwd=3)
+```
+```{r, fig.align='center', fig.width=8, fig.height=4}
+
+#PLot nothing only the axis 
+plot(-100, -100, 
+     ylim = c(min(log(HousePrices$price)), max(log(HousePrices$price))),
+     xlim = c(0, max(HousePrices$bedrooms)),
+     type="n",
+     ylab = "House Prices ($)",
+     xlab = "Nos of Bedrooms",
+     main = "Scatterplot of Lotsize and House Prize")
+
+#Plot Points with Jitter 
+points(jitter(log(price)) ~ bedrooms,
+       data = HousePrices,
+       pch  = 21,  # pch chooses the point character
+       cex = 1.5,
+       bg = "grey",
+       col  = rgb(0, 0, 0, .2))
+abline(lm(log(price) ~ bedrooms, data = HousePrices),col="red",lwd=3)
+```
+
+However, this a hedonic pricing example and not a randomized controlled trial; we cannot control the attributesto check if how these factor were assigned. So reverse causality is difficult to prove. Moreover, the data can face omited variable issues, which cannot be proved without collecting more data with more attributes. 
+
+# Reference
+
+Code:
+https://github.com/roh9singh/19-703-4
+
+[1] Anglin, P. M. and Gencay, R. (1996). Semiparametric estimation of a hedonic price function. Journal of Applied Econometrics, 11(6):633–648. 443
+[2] http://users.wfu.edu/cottrell/ecn215/regress_print.pdf
