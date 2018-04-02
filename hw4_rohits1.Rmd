@@ -1,0 +1,547 @@
+---
+title: "HW4"
+author: "Rohit Singh"
+date: "3/31/2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE , echo=FALSE,warning=FALSE}
+# load packages
+library(AER)
+library(knitr)
+library(quantreg)
+library(tables)
+library(car)
+library(mgcv)
+library(plyr)
+library(ROCR)
+```
+
+
+# Section I
+
+In this report we analyze the Gerfin (1996) on parametric and semi-parametric estimation of participation of Swiss women in the labor market. The data is collected from health survey conducted in Switzerland (SOMIPOPS) in 1981.
+
+The data includes information of variables and dummy variables like [Table 1 in paper]: PARTICIPATION, AGE, AGESQ (square of AGE), EDUC, NYC (Number of children 5 years or younger), NOC (Number of children oldern than 5 years), NLINC (log of non-labor income), FOREIGN (dummy variable of foreign residency)
+
+
+```{r}
+# load data
+data(SwissLabor)
+
+# add age squared variables
+SwissLabor$agesq <- ((SwissLabor$age*10)^2)/100
+
+```
+
+## 1) Data Replication
+
+There is a typo in paper for the AGESQ defination. With the paper's definition the estimate is -2.94 and error is 0.5 which is off by one decimal place. Logically the age square should be $age^2/100$. After the AGESQ correction Table I seems to be very precisely replicated. There is only 872 data points, however the paper writes 873.
+
+```{r warning=FALSE}
+probit.Tab1 <- glm(participation ~ age + agesq + education + youngkids + 
+                 oldkids + income + foreign, data=SwissLabor, 
+                 family = binomial(link = "probit"))
+
+table.I <- summary(probit.Tab1)$coefficients[,1:2]
+
+kable(table.I, digits=2)
+```
+
+
+# Section II
+
+In this section we go ahead with the 5-story of the data. Before we move ahead with the story telling of the data, we need to implement the $20-60-20$ rule and partition the data into 3 parts. The data is divided as follows:
+
+``` {r warning=FALSE}
+row.nos <- rep(1:5, length.out = nrow(SwissLabor))
+#row.nos <- sample(row.nos)
+
+# Create eval and training and test cases
+SLeval <- SwissLabor[row.nos == 1, ]            #20% of Data for Evaluation
+
+SLtrain <- SwissLabor[row.nos != 1 & row.nos != 5,]  #60% of Data for Training
+
+SLtest <- SwissLabor[row.nos == 5, ]            #20% of Data for Testing
+
+######################################################################################
+
+SLtrain.for.Model <- SwissLabor[row.nos != 5,]  #80% of Data for Model Training. 
+                                #This basically a combination on the first 20% and 60%
+
+```
+
+
+## 1) Histogram
+
+The first thing before doing any kind of analysis is to plot Histograms of the data so that have the essence of the distribution on the variables. To calculate the **bin width** we consider the Freedman-Diaconis rule.
+
+The first histogram is shows the distribution of AGE. The author divides the data by a order of 10, which signifies the decade of the person. The age of the women in the data range from early 20s to early 60s. The ditrbution is slightly right skewed, with a small tail at 60s. Women with age in 30s are dominent in this group.
+``` {r warning=FALSE, fig.align='center', fig.width=8, fig.height=4}
+
+hist(SLeval$age, breaks='FD',
+     #xlim   = c(10000,150000),  
+     #ylim   = c(0,25),
+     main   = "Histogram of Age", 
+     xlab = "Age")
+rug(jitter(SLeval$age))
+
+```
+
+Next, we analyze the education distribution. There seems to be a majority of women with 6-12 years of education (middle and high school), with a few over 12 years (college). The data is right skewed with a long tail on the right. Education will a factor for deciding the participation, as it might be easier to get a job for women with higher education.
+``` {r warning=FALSE, fig.align='center', fig.width=8, fig.height=4}
+
+hist(SLeval$education, breaks='FD',
+     xlim   = c(0,20),  
+     ylim   = c(0,50),
+     main   = "Histogram of Education", 
+     xlab = "Education in Years")
+rug(jitter(SLeval$education))
+
+```
+
+Next, we observe the logged Non-Labor Income, which represents a Normal distribution, with a slight right skewed. The income is log scaled, however on the \$ scale the income ranges from $ e^{9.25} = \$ 10,405$ till $e^{11.8} = \$ 133,252$. This shows a huge gap in income.
+``` {r warning=FALSE, fig.align='center', fig.width=8, fig.height=4}
+
+hist(SLeval$income, breaks='FD',
+     xlim   = c(9,12),  
+     #ylim   = c(0,25),
+     main   = "Histogram of Log of Non-Labor Income", 
+     xlab = "LOg of Income ($)")
+rug(jitter(SLeval$income))
+
+```
+
+In the NYC distribution it seems that most of the women in the data donot have young children, with very few having 1 or 2 children with age less than 5.
+``` {r warning=FALSE, fig.align='center', fig.width=8, fig.height=4}
+
+hist(SLeval$youngkids, breaks='FD',
+     #xlim   = c(10000,150000),  
+     #ylim   = c(0,25),
+     main   = "Histogram of Nos of Young Children", 
+     xlab = "No of Young Children")
+rug(jitter(SLeval$youngkids))
+
+```
+
+``` {r warning=FALSE, fig.align='center', fig.width=8, fig.height=4}
+
+hist(SLeval$oldkids, breaks='FD',
+     #xlim   = c(10000,150000),  
+     #ylim   = c(0,25),
+     main   = "Histogram of Nos of Old Children", 
+     xlab = "No of Old Children")
+rug(jitter(SLeval$oldkids))
+
+```
+
+
+To do an evaluation for a data with binary variables the best method is to look at them through tables. The table function tries to count the number of repetations for the binary option. In this case it will be a count for Yes and No, i.e., if a woman is a permanent foreign resident or not.
+
+```{r}
+# tables
+SL.table <- rbind(table(SLeval$participation),table(SLeval$foreign))
+
+rownames(SL.table) <- c("Participation", "Foreign")
+colnames(SL.table) <- c("No", "Yes")
+
+kable(SL.table)
+```
+
+The table shows a nearly equal distribution of participation of women the labor force. Moreover, majority of the women are not foreign residents. So there might be a biasness over foreign residents. Moreover, many foreigners might have got their education from differennt country. This brings a variation in the quality of education, which might effect the participation, and is a prospective interaction term.
+
+
+## 2) Logit and Bernoulli
+
+The logit model for Table I is as 
+$$ logit(p(x)) = log(\frac{p(x)}{1-p(x)}) = \eta(x) $$
+
+where, $p(x)$ is the conditional probability, and $\eta(x)$ is the linear model of $\beta$ with independent variables x as shown below:
+
+$$ \eta(x) = \beta_{0} + \beta_{1} * AGE + \beta_{2}* AGESQ + \beta_{3}* EDUC + \beta_{4} * NYC + \beta_{5} * NOC +  \beta_{6}* NLINC + \beta_{7}* FOREIGN $$
+
+Equating the above two equations:
+
+$$ log(\frac{p(x)}{1-p(x)}) =  \beta_{0} + \beta_{1} * AGE + \beta_{2}* AGESQ + \beta_{3}* EDUC + \beta_{4} * NYC + \beta_{5} * NOC +  \beta_{6}* NLINC + \beta_{7}* FOREIGN $$
+
+We know from Equation 1: $$ p(x) = \frac{1}{1+e^{-\eta(x)}} $$ Using it the model in Table I can be written in terms of Bernoulli likelihood function using logit link function. The logit link function connects the unobserved predicted conditional mean  $p(x)$ to the linear predictor $\eta(x)$ using a non-linear transform
+
+$$ L(p(x)|y_{i}) = \prod_{i=1}^n p(x)^{y_i} (1-p(x))^{1-y_i} = \prod_{i=1}^n  (\frac{1}{1+e^{-\eta(x)}})^{y_i} (1- \frac{1}{1+e^{-\eta(x)}})^{1-y_i} $$
+
+Considering a logit function transformation on the dependent variable which has binary values, will lead to an output ranging from negative to positive infinity. This doesn't make sense for a binary variable. 
+
+
+## 3) Logistic Regression
+
+Now, instead of using the probit function we do a Logistic Regression on the model from Table I. The new Coefficents and standard errors are as follow:
+
+```{r warning=FALSE}
+logit.Tab1 <- glm(participation ~ age + agesq + education + youngkids + 
+                 oldkids + income + foreign, data=SLeval, 
+                 family = binomial(link = "logit"))
+
+tableLR.I <- summary(logit.Tab1)$coefficients[,1:2]
+
+odds.ratio <- exp(summary(logit.Tab1)$coefficients[,1])
+
+tableLR.I <- cbind(tableLR.I,odds.ratio)
+
+kable(tableLR.I, digits=2)
+```
+
+
+```{r warning=FALSE}
+
+# Convert the Dummy variables to numeric
+SLeval$partnum <- ifelse(SLeval$participation == "yes", 1, 0)
+SLeval$fornum <- ifelse(SLeval$foreign == "yes", 1, 0)
+
+
+# Draw plot for Predicted Probability of Participation vs Women's Age
+
+# Jitter has been used just to observe the points
+plot(jitter(SLeval$age), jitter(SLeval$partnum, amount=0.05),
+     xlab = "Age (decades)",
+     ylab = "Predicted Probability of participation",
+     ylim = c(0, 1.1))
+
+# Add curve of predicted probabilities
+curve(1/(1 + exp(-(coef(logit.Tab1)[1] +
+                   coef(logit.Tab1)[2]*x +
+                   coef(logit.Tab1)[3]*x^2 +
+                   coef(logit.Tab1)[4]*mean(SLeval$education)+
+                   coef(logit.Tab1)[5]*mean(SLeval$youngkids)+
+                   coef(logit.Tab1)[6]*mean(SLeval$oldkids) +
+                   coef(logit.Tab1)[7]*mean(SLeval$income) +
+                   coef(logit.Tab1)[8]*mean(SLeval$fornum))
+                 )),
+      add = TRUE, lwd = 2)
+```
+
+The plot shows that the age and predicted participation have a non-linear relationship. The participation increases with age till later 30s and then decreases. The years of education needs to be considered to do any furtur analysis, as people with higher education might want easily get jobs. The fall in the plot after 40s is intutitive as women might retire early. 
+
+
+
+## 4) Calibration table
+
+To show that our Logistic regression model predicts the actual data we need to build the calibration table. In the first code we divide the expected and observed data into deciles. We calculate the cut-points for the 10 buckets and count the frequency of data in each bucket. The 2nd code shows the caliberation table. The 3rd and 4th columns are for Participation=1, and columns 5th and 6th are for Participation=0.
+
+```{r warning=FALSE}
+
+# Append the raw probobailty for each row
+SLeval$prob <- predict(logit.Tab1, type = "response")
+
+# find the decile cutpoints
+decile.cutpoints <- quantile(SLeval$prob, probs = seq(0, 1, .1))
+
+# bucket the probabilities into particular decileID
+SLeval$decileID <- cut(SLeval$prob, breaks = decile.cutpoints,
+                           labels = 1:10, include.lowest = TRUE)
+
+# Count the number of points in each bucket 
+observed <- as.data.frame.matrix(table(SLeval$decileID, SLeval$participation))
+
+# Count the Expected 
+expected <- tapply(SLeval$prob, SLeval$decileID, FUN = sum)
+
+```
+
+
+```{r}
+# Create a Caliberation Table
+interval.cutpoints <- round(quantile(SLeval$prob, probs = seq(.1, 1, .1)), 2)
+cal.table <- data.frame(interval.cutpoints)
+
+cal.table$observed.part <- observed[, 2]
+cal.table$expected.part <- round(expected, 0)
+
+cal.table$observed.ex <- observed[ , 1]
+cal.table$expected.ex <-round(nrow(SLeval)/10 - expected, 0)
+
+cal.table$total <- table(SLeval$decileID)
+
+kable(cal.table)
+```
+
+The table shows our logistic regressio model has very small deviation to the actual data. However, our model overpredicts in the middle decils.To visualize the under and over prediction we plot a caliberation plot for Participation=1. From the plot it seems that the under and over prediction doesn't seem to be symmetric. For the 6th decile there seems to be a huge underprediction.
+
+```{r}
+# calibration plot
+expected.freq <- as.numeric(cal.table[,3]/cal.table[,6])
+observed.freq <- as.numeric(cal.table[,2]/cal.table[,6])
+plot(expected.freq, observed.freq,
+     xlim = c(0,1), 
+     ylim = c(0,1),
+     xlab = "Predicted",
+     ylab = "Observed",
+     main = "Calibration plot" )
+abline(0,1)
+
+```
+
+
+## 5) GAM
+
+To comment on transformation requirement for the independent variabels we need to see their respective partial plots. We take out AGESQ out as we are smooting over AGE and EDU variables. 
+```{r}
+# GAM 
+
+gam.Tab1 <- gam(participation ~ s(age) + s(education) + 
+                youngkids + oldkids + income + foreign,
+                data = SLtrain, family = binomial(link = "logit"))
+
+# partial residual plots
+plot(gam.Tab1, residuals = TRUE, shade = TRUE)
+```
+
+The partial residual plot for AGE shows a non-linear (more like a parabola) pattern. This suggests that the AGE varaible needs a transformation and considering the $age^2$ would solve the issue. On the other hand the EDU plot shows a kind of linear pattern. The confidence interval widens at the ends, which is due to the outliers present on both sides of the data. The middle portion seems to have a linear pattern, and doesn't need a transformation. However, there might a need for an interaction term with the education and foreign variables.
+
+
+
+## 6) Stukel's test
+
+Stukel's test is used to verify if our choice of link funvction is correct or not.
+
+```{r}
+################# Test for LR
+logit.Tab1 <- glm(participation ~ age + agesq + education + youngkids + 
+                 oldkids + income + foreign, data=SLtrain, 
+                 family = binomial(link = "logit"))
+
+eta.hat <- predict(logit.Tab1)
+positive <- ifelse(eta.hat >= 0, 1, 0)
+negative <- ifelse(eta.hat < 0, 1, 0)
+eta.hat.sq <- eta.hat^2
+
+
+stu.lr <- glm(participation ~ age + agesq + education + youngkids
+                              + oldkids + income + foreign
+                              + eta.hat.sq:positive + eta.hat.sq:negative,
+              data = SLtrain, family = binomial(link = "logit"))
+
+# extract alphas
+alpha1.lr <- 2 * summary(stu.lr)$coef[9,1]
+alpha2.lr <- -2 * summary(stu.lr)$coef[10,1]
+
+
+################# Test for GAM
+gam.Tab1 <- gam(participation ~ s(age) + s(education) + 
+                youngkids + oldkids + income + foreign,
+                data = SLtrain, family = binomial(link = "logit"))
+
+
+eta.hat <- predict(gam.Tab1)
+positive <- ifelse(eta.hat >= 0, 1, 0)
+negative <- ifelse(eta.hat < 0, 1, 0)
+eta.hat.sq <- eta.hat^2
+
+stu.gam <- gam(participation ~ s(age) + s(education) + youngkids
+                              + oldkids + income + foreign
+                              + eta.hat.sq:positive + eta.hat.sq:negative,
+              data = SLtrain, family = binomial(link = "logit"))
+
+# extract alphas
+alpha1.gam <- 2 * summary(stu.lr)$coef[6,1]
+alpha2.gam <- -2 * summary(stu.lr)$coef[7,1]
+
+alphas <- rbind(c(alpha1.lr, alpha2.lr),
+                c(alpha1.gam, alpha2.gam))
+
+colnames(alphas) <- c("alpha 1", "alpha 2")
+rownames(alphas) <- c("Logit link", "GAM")
+
+kable(alphas)
+```
+
+The Logistic regression seems to be apropriate since $\alpha_1>\alpha_2>0$. This indicates that curve is steeper with shorter tails. On the other hand the GAM model $\alpha_2>0>\alpha_1$. This indicates that curve is not so steep compared to logistic. This maybe due to the limitation of 20-60-20 data split.  
+
+
+## 7) Cross-Validation ROC 
+
+We now move on to crossvalidation, i.e., the best guess at what the new data will look like with the exsisting data [Lecture Notes]. For crossvalidation I select 3 models. 
+
+1) Model 1 is without any transformation
+2) Model 2 is with transformation
+3) Model 3 is with transformation and a interaction term. I propose that the interaction term between the education and foreign variables be considered. As the quality of foreign education might have an effect.
+
+For a 5 fold crossvalidation I get the following average AUCs.
+```{r}
+
+predictions1 <- c()
+predictions2 <- c()
+predictions3 <- c()
+labels <- c()
+
+logit.cv <- function(n)
+{
+  nfolds <- n
+  case.folds <- rep(1:nfolds, length.out = nrow(SLtrain))
+  
+  for(fold in 1:nfolds){
+    
+     # Create training and test cases
+    train <- SLtrain[case.folds != fold, ]
+    test <- SLtrain[case.folds == fold, ]
+    
+    # Run glm on training data
+    logit.Tab1 <- glm(participation ~ age + education + youngkids
+                              + oldkids + income + foreign,
+                              data = train, family = binomial(link = "logit"))
+    gam.Tab1 <- glm(participation ~ age + I(age^2) + education + youngkids
+                              + oldkids + income + foreign,
+                             data = train, family = binomial(link = "logit"))
+    logit.inter.Tab1 <- glm(participation ~ age + I(age^2) + education + education * foreign
+                              + youngkids + oldkids + income + foreign,
+                              data = train, family = binomial(link = "logit"))
+    
+    glmpred1 <- predict(logit.Tab1, test, type = "response")
+    glmpred2 <- predict(gam.Tab1, test, type = "response")
+    glmpred3 <- predict(logit.inter.Tab1, test, type = "response")
+    
+    predictions1 <- append(predictions1, glmpred1)
+    predictions2 <- append(predictions2, glmpred2)
+    predictions3 <- append(predictions3, glmpred3)
+    
+    labels <- append(labels, test$participation)
+    }
+ return(list(predictions1, predictions2, predictions3, labels))
+}
+
+cvresult <- replicate(100, logit.cv(5))
+preds1 <- sapply(cvresult[1, ], cbind)
+preds2 <- sapply(cvresult[2, ], cbind)
+preds3 <- sapply(cvresult[3, ], cbind)
+labs1 <- sapply(cvresult[4, ], cbind)
+
+
+```
+
+```{r}
+# Run the ROCR prediction and performance measures
+glmerr1 <- prediction(preds1, labs1)
+glmperf1 <- performance(glmerr1, measure="tpr", x.measure="fpr")
+
+glmerr2 <- prediction(preds2, labs1)
+glmperf2 <- performance(glmerr2, measure="tpr", x.measure="fpr")
+
+glmerr3 <- prediction(preds3, labs1)
+glmperf3 <- performance(glmerr3, measure="tpr", x.measure="fpr")
+
+# This gives a vector of AUCs
+glmauc1 <- performance(glmerr1, measure = "auc")
+glmauc2 <- performance(glmerr2, measure = "auc")
+glmauc3 <- performance(glmerr3, measure = "auc")
+
+# Unlist the AUCs
+glmauc1 <- unlist(glmauc1@y.values)
+glmauc2 <- unlist(glmauc2@y.values)
+glmauc3 <- unlist(glmauc3@y.values)
+
+# Take the average
+glmauc1 <- mean(glmauc1)
+glmauc2 <- mean(glmauc2)
+glmauc3 <- mean(glmauc3)
+
+print(paste0("Model 1 Mean AUC: ",glmauc1))
+print(paste0("Model 2 Mean AUC: ",glmauc2))
+print(paste0("Model 3 Mean AUC: ",glmauc3))
+
+### ROC plot for the 3 models
+plot(glmperf1,
+     col              = "red",
+     main             = "Cross-Validated ROC Curves",
+     avg              = 'threshold',
+     spread.estimate  = 'stddev',
+     print.cutoffs.at = seq(.0, .9, by = 0.1),
+     text.adj         = c(-.5, 1.2),
+     xlab             = "Mean False Positive Rate",
+     ylab             = "Mean True Positive Rate")
+abline(0, 1)
+
+plot(glmperf2,
+     col              = "blue",
+     avg              = 'threshold',
+     spread.estimate  = 'stddev',
+     print.cutoffs.at = seq(.0, .9, by = 0.1),
+     text.adj         = c(1.5, 0.5),
+     add              = TRUE)
+
+plot(glmperf3,
+     col              = "green",
+     avg              = 'threshold',
+     spread.estimate  = 'stddev',
+     add              = TRUE)
+     
+```
+We always want a model to have a high AUC value which signifies a high true positive rate for every false positive rate. The average ROC plot for the 3 models shows that the simple model (red) has the least AUC. Model 2 (blue) and Model 3 (green) compete with each other, however the AUCs are pretty close. Model 3 shows an improvement of 0.001 unit of AUC. 
+
+Finally, we take the first $80\%$ of the data and train our models and test it with the last $20\%$ of the data.
+
+```{r}
+
+logit.Tab1 <- glm(participation ~ age + education + youngkids
+                              + oldkids + income + foreign,
+                              data = SLtrain.for.Model, family = binomial(link = "logit"))
+
+gam.Tab1 <- glm(participation ~ age + agesq + education + youngkids
+                              + oldkids + income + foreign,
+                             data = SLtrain.for.Model, family = binomial(link = "logit"))
+
+logit.inter.Tab1 <- glm(participation ~ age + I(age^2) + education + education * foreign
+                              + youngkids + oldkids + income + foreign,
+                              data = SLtrain.for.Model, family = binomial(link = "logit"))
+
+glmpred1 <- predict(logit.Tab1, SLtest, type = "response")
+glmpred2 <- predict(gam.Tab1, SLtest, type = "response")
+glmpred3 <- predict(logit.inter.Tab1, SLtest, type = "response")
+labels <- SLtest$participation
+
+glmerr1 <- prediction(glmpred1, labels)
+glmperf1 <- performance(glmerr1, measure="tpr", x.measure="fpr")
+
+glmerr2 <- prediction(glmpred2, labels)
+glmperf2 <- performance(glmerr2, measure="tpr", x.measure="fpr")
+
+glmerr3 <- prediction(glmpred3, labels)
+glmperf3 <- performance(glmerr3, measure="tpr", x.measure="fpr")
+
+# This gives a vector of AUCs
+glmauc1 <- performance(glmerr1, measure = "auc")
+glmauc2 <- performance(glmerr2, measure = "auc")
+glmauc3 <- performance(glmerr3, measure = "auc")
+
+
+# Unlist the AUCs
+glmauc1 <- unlist(glmauc1@y.values)
+glmauc2 <- unlist(glmauc2@y.values)
+glmauc3 <- unlist(glmauc3@y.values)
+
+print(paste0("Model 1 AUC: ",glmauc1))
+print(paste0("Model 2 AUC: ",glmauc2))
+print(paste0("Model 3 AUC: ",glmauc3))
+
+```
+
+After doing the prediction on the last $20\%$ data we see that Model 3 has the highest AUC. It is quite obvious that there should be some relation between the years of education and the recidency of the women. Including the interaction term we get a better AUC value. 
+
+
+
+## 8) Statistical Inference & Causality
+
+The data looks very promising with very few outliers. The data consists of the 873 married women in a health survey for 1981. This is very specific data as it only considers "married women", ages 20s-60s, and those who participated in the health survey. This draws a limitation on the inferences we can draw from this data. More information is required how the data was collected, or if there was any kind of random assignment. The data seems to be biased with the number of foreigners. 
+
+For causality it is difficult to give any kind of inference as there are many possibilities with the variables. There can be strong cases of omitted variable bias. To predict participation in the labor market other factors can be considered like location, or other family members financial staus. We cannot prove if there is any reverse causality or conditioning on collider as well. This is real world data and hence there are chances that variables like non-labor income and number of childeren have some covariance. One such example will be the foreigners and their education. The foreigners might have had their education from a different country and this might lead to variation in the quality of education. As we have seen education is a strong factor while considering participation, we need to consider the interaction between these two variables.
+
+
+
+# Reference
+
+[1] Gerfin, Michael. "Parametric and Semi-Parametric Estimation of the Binary Response Model of Labour Market Participation". Journal of Applied Econometrics, Vol. 11, No. 3, 1996
+
+
+https://github.com/roh9singh/19-703-4
+
