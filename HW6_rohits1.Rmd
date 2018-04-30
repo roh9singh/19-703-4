@@ -1,0 +1,582 @@
+---
+title: "HW6"
+author: "Rohit Singh"
+date: "4/28/2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r include=FALSE , echo=FALSE,warning=FALSE}
+#install.packages("Ecdat", repos = "http://lib.stat.cmu.edu/R/CRAN/")
+library(Ecdat)
+library(plm)
+library(arm)
+library(AER)
+library(mgcv)
+library(car)
+library(knitr)
+library(xtable)
+data("Cigar", package = "Ecdat")
+Cigar <- pdata.frame(Cigar, index = c("state", "year"))
+
+# Load data
+Cigar <- read.table( "http://www.wiley.com//legacy/wileychi/baltagi/supp/Cigar.txt", sep = "")
+colnames(Cigar) <- c("state", "year", "price", "pop",
+                     "pop16", "cpi", "ndi", "sales", "pimin")
+Cigar <- pdata.frame(Cigar, index = c("state", "year"))
+```
+
+
+The paper [1] is a panel data set of cigarette consumption across 46 states from 1963 to 1992. The variables are as follows:
+1) sales: information on the state cigarette sales (packs per capita) 
+2) price: information on $ per pack of cigarettes)
+3) pimin: the minimum price of cigarettes in adjoining states in $ per pack of cigarettes
+4) ndi: the per capita disposal income (ndi) 
+5) year: for the year of the observation of the data from 1963 to 1992
+6) state: state of the data from 46 states
+ 
+# Section I
+
+```{r}
+# sales adjusted based on smoking age 16 or older.
+CigarM <- Cigar
+# Adjust by population over 16
+CigarM$sales.pop <- CigarM$sales*(CigarM$pop/CigarM$pop16)
+```
+
+Before we move on try replicating the paper, we have to create a lag variable for sales which keep track of the previous year data. The "head" function checks if the lag was properly conducted or not. 
+```{r}
+# Create lagged regressor
+CigarM$saleslag <- lag(CigarM$sales, 1)
+head(CigarM[ , c("saleslag", "sales")]) 
+```
+
+
+## 1) Replicate Table I
+
+The authors in the paper hav considered 3 models:
+
+Model I: OLS complete pooling
+Model II: OLS with the time dummies for the year of the observation
+Model III: Within Model.
+
+While trying to reproduce the results mentioned in Table I, I faced isues. Firstly the normal way of using the variables to reacreate Table I landed up having the coefficients and standard deviation to be way off. 
+``` {r warning=FALSE}
+cp <- lm(log(sales) ~ log(saleslag) + log(price) + log(pimin) + log(ndi), data = CigarM)
+#summary(cp)
+kable(cbind(summary(cp)$coef[2:5,1],summary(cp)$coef[2:5,3]), digits = 3)
+```
+
+Thus had to be adjusted the variables to dollar values based on the CPI for year 1983.This wasn't mentioned clearly in the paper.
+```{r}
+CPI.1983 <- unique(CigarM$cpi[which(CigarM$year == 83)])
+
+# update prices and disposable income to real dollars (1983)
+CigarM$price.r <- CigarM$price * CPI.1983 / CigarM$cpi 
+CigarM$pimin.r <- CigarM$pimin * CPI.1983 / CigarM$cpi 
+CigarM$ndi.r <- CigarM$ndi * CPI.1983 / CigarM$cpi 
+```
+
+Results from Table I with the adjusted variables are as follows:
+``` {r warning=FALSE}
+cp <- lm(log(sales) ~ log(saleslag) + log(price.r) + log(pimin.r) + log(ndi.r), data = CigarM)
+#summary(cp)
+kable(cbind(summary(cp)$coef[2:5,1],summary(cp)$coef[2:5,3]), digits = 3)
+
+```
+```{r warning=FALSE}
+cpt <- lm(log(sales) ~ log(saleslag) + log(price.r) +
+           log(pimin.r) + log(ndi.r) + factor(year), data = CigarM)
+#summary(cp.t)
+kable(cbind(summary(cpt)$coef[2:5,1],summary(cpt)$coef[2:5,3]), digits = 3)
+```
+```{r warning=FALSE}
+win <- plm(log(sales) ~ log(saleslag) + log(price.r) +
+               log(pimin.r) + log(ndi.r) + factor(year) + factor(state),
+               model = "within", data = CigarM)
+#summary(win)
+kable(cbind(summary(win)$coef[2:5,1],summary(win)$coef[2:5,3]), digits = 3)
+```
+For Model I the saleslag variable is exactly same with a small difference in the t-value. However, the other 3 variables  price.r, primin.r and ndi.r are significantl off by 0.01, 0.004 and 0.002 units respectively, along with their t-value. For Model II and III are a better recreation of Table I, however there are significant deviations fromn the result in the paper. This shows that even after adjusting for real values, there are discrepencies even in the t values. This maybe due to the authors are reporting the absolute value of the t-statistic
+
+
+## 2) Ability to replicate
+
+The authors did presnet the data in a R data-set which helped us in the part of reproducibility. Howevere, there were many hickuops while trying to do so. The main reason why it was difficult to replicate the results was due to the authors not being upfront with their assumption and methods. I had to do a little amount of brute force to come close to the results in Table 1. 
+
+Nevertheless, my results are still off by third decimal place. This is a common challenge faced in reproducibility. 
+This highligths the fact the importance of reproducibility. Due to the superficial discussion about the data and their methods it was difficult to recreate the data. We hade to consider many assumptions before we could land up with the actual recreation of the results.
+
+I feel that if we had the code then it would have been easier to make sense about what the authors have done. To make the results reproducible one should follow Feynman's Rule of bending over backwards to show where they might be wrong. If not atleast a careful and thorough description of the data and the process is necessry. 
+
+
+## 3) Interpretation 
+
+The OLS model proposed by the author have both the dependent and the independednt variables as log transformed. The coefficients of the OLS models shows a positive corelation with saleslag and pimin while negatively corelated with price and ndi. This is obvious since with increasing saleslag and pimin (price of neighboring states) the consumption should increase as people in that state will buy more. Whike the sales decrease with the price and ndi. However, it is not intutive for the ndi variable, as more disposable money should signal increase in sales. But, this might be specific to the smoking pattern or other omitted variables.
+
+Moreover, all the log transformations gives us an intution of "log-log", i.e., a percentage change in the independent variable is associated with a percentage change in the independent. The coefficient estimate for price is -0.106, therefore a 1% increase in the price of cigarettes in a state is associated with a 0.106% decrease in the consumption of cigarettes in that state. Similarly for the variables pimin and ndi. 
+
+
+\break
+
+# Section II
+
+Before we move ahead with the story telling of the data, we need to implement the $20-60-20$ rule and partition the data into 3 parts. The data is divided as follows:
+
+```{r}
+##### 20-60-20 #####
+set.seed(123)
+row.nos <- rep(1:5, length.out = nrow(CigarM))
+row.nos <- sample(row.nos)
+
+# Create eval and training and test cases
+Cgeval <- CigarM[row.nos == 1, ]            #20% of Data for Evaluation
+
+Cgtrain <- CigarM[row.nos != 1 & row.nos != 5,]  #60% of Data for Training
+
+Cgtest <- CigarM[row.nos == 5, ]            #20% of Data for Testing
+
+######################################################################################
+
+Cgtrain.for.Model <- CigarM[row.nos != 5,]  #80% of Data for Model Training. 
+                                #This basically a combination on the first 20% and 60%
+
+```
+
+
+## 1) 5 Story 
+
+5 stories are as follows:
+
+1. Data summary: It is the way of talking about the data as it is, through histograms and table for dummy variables. 
+
+2. Conditional distribution: It is the story of talking about the variable in interest with respoect other variables in the data, based on the model. 
+
+3. Forecasting: It identifys the models concluded in the conditional distrinution story and use them to predict the new data. We often to cross-validation and divide the data into folds to get the exact rMSE values for the models.
+
+4. Statistical inference: This story involves generalization of the data for larger data samples. Finding out the homoskedasticity and heterosodasticty.
+
+5. Causal inference: Trying to commont on causality and random assignment of the data is one of the tasks in this story. 
+
+I feel that the most important story is the Data summary which gives you the birds eye view of the data. Trying to observe the distribution using a histogram or table gives us intution about the transformations required for the variables and often help in concluding with the other stories. I feel that the neglected story is the data summary as well. Reserchs tend to directlly identifying the models using the dependent and independent variables without even looking at the distribution for the variables. I feel the most confused story is the Conditional story, where the residuals calulations are often flawed. People often draw conclusions based on standardized residuals, while it is better to conclude based on studentized residual since it considers the leverage. Moreover, forcasting story comes naturally as the intution for the data analysis is to predict future tend of the outcome. However, it is expected that we do talk about the statistical inference and causal inference stories, as we can have results which might prove a hypothesis to be true; hoeverem, we have to consider if the result is statistically significant or not and if there are any omitted variable biases or not associated with our results. 
+
+
+
+## 2) Justify Log Transform for Dependent 
+
+To determine if a log transform is justified for the dependent variable or not the first task is to look into the data distribution of the variable **sales**. The histogram plot for the same is as follows:
+
+``` {r warning=FALSE, fig.align='center', fig.width=8, fig.height=4}
+
+hist(Cgeval$sales, breaks='FD',
+     #xlim   = c(10000,150000),  
+     #ylim   = c(0,25),
+     main   = "Histogram of cigarette saless", 
+     xlab = "Sales (packs per capita)")
+rug(jitter(Cgeval$sales))
+
+```
+
+The histogram plots gives an intution that the data is skewed to the right, with a long tail on the right. By the looks of the histogram it seems to me it is a log-normal distribution. To gain a stronger conclusion let us observe the QQPlot for the log transformation of sales.
+```{r}
+qqnorm(log(Cgeval$sales))
+qqline(log(Cgeval$sales))
+```
+
+After the transformation the QQPlot is aligned with the QQline showing that it falls in line with the normal ditribution. However there are outliers on both tails. Therefore, to get a definite answer we do a BoxCox tranform one with log transform and the other without trasnform. 
+```{r}
+# check boxCox 
+bc1 <- boxCox(Cgeval$sales ~ (Cgeval$saleslag) + (Cgeval$price.r) +
+               (Cgeval$pimin.r) + (Cgeval$ndi.r)+
+                factor(Cgeval$year) + factor(Cgeval$state), family = 'yjPower')
+
+bc2 <- boxCox(Cgeval$sales ~ log(Cgeval$saleslag) + log(Cgeval$price.r) +
+               log(Cgeval$pimin.r) + log(Cgeval$ndi.r) + 
+                factor(Cgeval$year) + factor(Cgeval$state) , family = 'yjPower')
+
+print(bc1$x[bc1$y == max(bc1$y)])
+print(bc2$x[bc2$y == max(bc2$y)])
+```
+
+Both $\lambda$ values are approaching 0, however the onw with the log transform have the 0 point within the 95% confidence interval. This signifies that log transform is recommended for the dependent variable.
+
+
+## 3) Justify Log Transform for Independent
+
+To justify the log transform of the independent variable we frst draw the histograms.
+``` {r warning=FALSE, fig.align='center', fig.width=8, fig.height=4}
+
+hist((Cgeval$saleslag), breaks='FD',
+     #xlim   = c(10000,150000),  
+     #ylim   = c(0,25),
+     main   = "Histogram of price", 
+     xlab = "Price in $")
+rug(jitter(table(Cgeval$saleslag)))
+
+#max(table(Cgeval$price))
+
+``` 
+
+The lag vaiable is nothing but the sales for the previous year. So a log transform is justifiedis justified as explained in the previous question.
+
+For the rest of the 3 variables the histograms are as follows:
+``` {r warning=FALSE, fig.align='center', fig.width=8, fig.height=4}
+
+hist((Cgeval$price.r), breaks='FD',
+     #xlim   = c(10000,150000),  
+     #ylim   = c(0,25),
+     main   = "Histogram of price", 
+     xlab = "Price in $")
+rug(jitter(table(Cgeval$price.r)))
+
+hist((Cgeval$pimin.r), breaks='FD',
+     #xlim   = c(10000,150000),  
+     #ylim   = c(0,25),
+     main   = "Histogram of disposable income", 
+     xlab = "Disposable income in $")
+rug(jitter(table(Cgeval$pimin.r)))
+
+hist((Cgeval$ndi.r), breaks='FD',
+     #xlim   = c(10000,150000),  
+     #ylim   = c(0,25),
+     main   = "Histogram of disposable income", 
+     xlab = "Disposable income in $")
+rug(jitter(table(Cgeval$ndi.r)))
+
+```
+
+From the looks of the histogram it seems that the distributions follow a normal distribution and no transformation is required. However, there is a fare amount of skeweness due to the outliers. So there are chances that we are better off with the log transfor, so next we do a Box-Tidwell analysis.
+
+```{r warning=FALSE}
+
+# boxTidwell tests
+boxTidwell(log(Cgeval$sales) ~ Cgeval$price.r, 
+           other.x = ~ log(Cgeval$saleslag) + Cgeval$pimin.r + Cgeval$ndi.r)
+
+# boxTidwell tests
+boxTidwell(log(Cgeval$sales) ~ Cgeval$pimin.r, 
+           other.x = ~ log(Cgeval$saleslag) + Cgeval$ndi.r + Cgeval$price.r)
+
+# boxTidwell tests
+boxTidwell(log(Cgeval$sales) ~ Cgeval$ndi.r, 
+           other.x = ~ log(Cgeval$saleslag) + Cgeval$pimin.r + Cgeval$price.r)
+
+```
+
+The lamda values from the Box-Tidwell are huge along with very high p-value, so we cannot say anything with certainty. Next we do a generalized additive model (gam).
+
+The Fitted vs Residual plot shows near linear effect, and doesn't look like there is much heteroskedasticity in the data.
+```{r}
+gam <- gam(log(sales) ~ s(saleslag) + s(price.r) + s(pimin.r) + s(ndi.r) 
+            + factor(year) + factor(state),
+            data = Cgeval)
+
+plot(fitted(gam), resid(gam),
+     xlab = "Fitted Values",
+     ylab = "Residuals",
+     pch = 19,
+     col = "black",
+     ylim = c(-1, 1),
+     main = "Fitted vs. residuals")
+lines(lowess(fitted(gam), resid(gam)), col = "red", lwd = 2)
+```
+
+There is some non-linearity in the lagged sales so considering a log distribution is a good choice for the saleslag as suggested earlier.
+```{r}
+plot(gam,
+     residuals = TRUE,
+     shade = TRUE,
+     select = 1,
+     main = "lagged sales")
+
+```
+
+The smoothing for price, neighboring price, and disposable income though look linear do still have a curvature. This gives an intution that the variables are a polynomial function. 
+```{r}
+plot(gam,
+     residuals = TRUE,
+     shade = TRUE,
+     select = 2,
+     main = "price")
+
+plot(gam,
+     residuals = TRUE,
+     shade = TRUE,
+     select = 3,
+     main = "neighboring price")
+
+plot(gam,
+     residuals = TRUE,
+     shade = TRUE,
+     select = 4,
+     main = "disposable income")
+
+```
+
+I feel that the log-log model looks fine so that we can avoid a polynomial transform for the variables. However, it would be better if the authors had provided their explaination for their transformation.
+
+## 4) Residuals 
+
+With the log transform for the independent variable the QQPlot looks linear and within the confidence bands. Next, we can consider the jacknife residuals of the three models.
+
+```{r}
+
+#  model I
+cp <- lm(log(sales) ~ log(saleslag) + log(price.r) + log(pimin.r) + log(ndi.r), 
+               data = Cgeval)
+
+#  model II
+cpt <- lm(log(sales) ~ log(saleslag) + log(price.r) + log(pimin.r) + log(ndi.r) +
+                       factor(year), data = Cgeval)
+
+#  model III
+win <- lm(log(sales) ~ log(saleslag) + log(price.r) + log(pimin.r) + log(ndi.r)
+                  + factor(state) - 1 + factor(year) - 1 , data = Cgeval)
+
+
+# QQPlot
+qqPlot(cp, main = "OLS model")
+qqPlot(cpt, main = "OLS with Time model")
+qqPlot(win, main = "Within model")
+
+```
+
+
+```{r}
+# check jacknife residuals
+
+#  model I
+plot(fitted(cp), rstudent(cp),
+     xlab = "Fitted Values",
+     ylab = "Jackknife Residuals",
+     pch = 19,
+     col = rgb(0, 0, 0, .5),
+     ylim = c(-4, 4),
+     main = "OLS model")
+lines(lowess(fitted(cp), rstudent(cp)), col = "green", lwd = 2)
+abline(h = 0, col = "red", lty = 2, lwd = 4)
+
+#  model II
+plot(fitted(cpt), rstudent(cpt),
+     xlab = "Fitted Values",
+     ylab = "Jackknife Residuals",
+     pch = 19,
+     col = rgb(0, 0, 0, .5),
+     ylim = c(-4, 4),
+     main = "OLS with Time model")
+lines(lowess(fitted(cpt), rstudent(cpt)), col = "green", lwd = 2)
+abline(h = 0, col = "red", lty = 2, lwd = 4)
+
+#  model III
+plot(fitted(win), rstudent(win),
+     xlab = "Fitted Values",
+     ylab = "Jackknife Residuals",
+     pch = 19,
+     col = rgb(0, 0, 0, .5),
+     ylim = c(-4, 4),
+     main = "Within model")
+lines(lowess(fitted(win), rstudent(win)), col = "green", lwd = 2)
+abline(h = 0, col = "red", lty = 2, lwd = 4)
+
+```
+
+Both the Studentized and the Jack-knife residuals have some issues with outliers at the tail ends of the distributions for all three models. The Model III which is the within model looks better for the outliers. Finally, we can look at the cook's distances for each of the three models by using influence plots:
+
+```{r warning=FALSE}
+# influence plots
+influenceIndexPlot(cp, id.n = 3)
+
+influenceIndexPlot(cpt, id.n = 3)
+
+influenceIndexPlot(win, id.n = 3)
+```
+
+From the influence diagram we can see that as we move from Model I to III the studentized residualzs are increased, hat-values(leverage) are increased and as well as the number of outliers. So Model I gives a better fit than Model III. To mitigate this we can remove the outliers and see how the residuals change. I guess these outliers have a high leverage which can effect the distribution. 
+
+
+## 5) Partial pooling
+
+For the partial pooling case we have to use the lmer function which is shown below. 
+```{r warning=FALSE}
+# partial pooling model
+pp <- lmer(log(sales) ~ log(saleslag) + log(price.r) + log(pimin.r) + log(ndi.r) 
+                 + (1|year) + (1|state), data = Cgeval)
+
+kable(summary(pp)$coef)
+
+
+kable(summary(win)$coef[1:4,])
+
+
+# variance for state and year for partial and no pooling respectively
+pp.s.var <- var(fixef(pp)[1] + ranef(pp)$state)
+pp.y.var <- var(fixef(pp)[1] + ranef(pp)$year)
+kable(cbind(pp.s.var,pp.y.var))
+
+win.s.var <-  var(summary(win)$coef[5:50])
+win.y.var <-  var(summary(win)$coef[51:77])
+kable(cbind(win.s.var,win.y.var))
+
+
+```
+
+
+Both table show that the coefficient values are slightly different. Now if we compare the standard error where the partial pooling version of the within model performs better than the no pooling version. The partial pooling model treats the data nation wide and hence the varience is reduced, on the contrary the no-pooling treats it state wide and has a higher varience. The last two tables show that for both the state and the years the partial pooling has lower variance than no pooling. 
+
+
+
+## 6) Exogeneity 
+
+We need the strict exogeneity assumption to hold which is the expected values of the errors in any time period should be independent of the regressors in all time periods. The component + residual polt helps us comment on it.
+
+
+```{r}
+# component plus residual plot for the lsdv of the within model
+crPlots(cp, main = "Component + Residual Plot fot Model I")
+crPlots(cpt, main = "Component + Residual Plot for Model 2")
+crPlots(win, main = "Component + Residual Plot for Model 3")
+```
+
+
+To comment about exoginity we need to comment on 1) contemporaneous exogeneity, 2) backward exogeneity, and 3) forward exogeneity. Case 1 holds if there are no omitted variables which is hard to say. With within model which considers the time and state levels variables, we can say that the omitted variables are removed. For Backward and forward it depends on the lagged variable. The residuals donot show much heteroskodasticity. We can see a positive relationship between the residuals and lagged sales, suggesting an intertemporal relationship. While the price on the contrary has a negative slope which is intutive. Since there is a high dependency on the lagged variable it is difficult to comment on it as well.
+
+
+
+## 7)  Differences-in-differences
+
+All the 4 policies mentioned in the paper are somehow implemented by the three models. Moreover, all of the three models are different in their way as they treat their variables differently. Model I doesn't consider the time and state level effects. Model II  considers only the time effect and Model III considers both effects. The effect of a state or a state at a particular time will be somehow be captured by omne of the three models.
+
+We cannot do difference-in-difference the reason being that we donot have any control group on the state level. Which is not the case as the authors say that the policies are federal and can effect more than one state. However, for a difference-in-difference we need to have a state which has no effect based on the policy. So we would need s control sate which is immuned to the policy and is hard to get. 
+
+If we had that data then we would use a dummy variable to signify if the variable was from a treatment group or not and incorporate it into our regression. Followed by an interaction term of that dummy variable with time.
+
+
+
+## 8) Forcasting 
+
+For the forcasting story we use the $60\%$ data and divide it into train and test. However, here we train over all but 1992 data and test over the 1992 data. To see if the three models have a low rMSE or not. 
+```{r}
+
+# Training data drops the last time period
+training <- Cgtrain[!Cgtrain$year == 92, ]
+# Test data includes only the last time period
+test <- Cgtrain[Cgtrain$year == 92, ]
+
+# OLS model
+model.I <- lm(log(sales) ~ log(saleslag) + log(price.r) + log(pimin.r) + log(ndi.r), 
+                data = training)
+
+# OLS with Time
+model.II <- lm(log(sales) ~ log(saleslag) + log(price.r) + log(pimin.r) + log(ndi.r) 
+              + factor(year), data = training)
+# Within
+model.III <- lm(log(sales) ~ log(saleslag) + price.r + pimin.r + ndi.r 
+                  + factor(state) - 1 + factor(year) - 1 , data = training)
+
+test$year <- 90
+
+# Predict test data
+model.I.pred <- predict(model.I, newdata = test)
+model.II.pred <- predict(model.II, newdata = test)
+model.III.pred <- predict(model.III, newdata = test)
+
+# Calculate the residuals
+model.I.resid <- log(test$sales) - model.I.pred
+model.II.resid <- log(test$sales) - model.II.pred
+model.III.resid <- log(test$sales) - model.III.pred
+
+# Get the rMSE values for both models
+rMSE.model.I <- mean(model.I.resid^2)
+rMSE.model.II <- mean(model.II.resid^2)
+rMSE.model.III <- mean(model.III.resid^2)
+
+kable(cbind(rMSE.model.I, rMSE.model.II, rMSE.model.III))
+```
+
+The table shows that all three models are good in forcasting the values. Although the difference is very smallHowevre, the OLS model actuall outperforms the within estimation model. This shows that a more complex model time and state as variables  does not necessarily mean that the rMSE will be better. Hence, the whole focus of the paper which is whether or not to do partial or complete pooling. 
+
+```{r}
+
+# Training data drops the last time period
+training <- Cgtrain.for.Model[!Cgtrain.for.Model$year == 92, ]
+# Test data includes only the last time period
+test <- Cgtest[Cgtest$year == 92, ]
+
+# OLS model
+model.I <- lm(log(sales) ~ log(saleslag) + log(price.r) + log(pimin.r) + log(ndi.r), 
+                data = training)
+
+# OLS with Time
+model.II <- lm(log(sales) ~ log(saleslag) + log(price.r) + log(pimin.r) + log(ndi.r) 
+              + factor(year), data = training)
+# Within
+model.III <- lm(log(sales) ~ log(saleslag) + price.r + pimin.r + ndi.r 
+                  + factor(state) - 1 + factor(year) - 1 , data = training)
+
+test$year <- 90
+
+# Predict test data
+model.I.pred <- predict(model.I, newdata = test)
+model.II.pred <- predict(model.II, newdata = test)
+model.III.pred <- predict(model.III, newdata = test)
+
+# Calculate the residuals
+model.I.resid <- log(test$sales) - model.I.pred
+model.II.resid <- log(test$sales) - model.II.pred
+model.III.resid <- log(test$sales) - model.III.pred
+
+# Get the rMSE values for both models
+rMSE.model.I <- mean(model.I.resid^2)
+rMSE.model.II <- mean(model.II.resid^2)
+rMSE.model.III <- mean(model.III.resid^2)
+
+kable(cbind(rMSE.model.I, rMSE.model.II, rMSE.model.III))
+```
+
+To furthur the analysis we do the same forcasting on the 80\% of the data followed by testing on the 20% and we see that effect remains the same. Though initially during our conditional story the Within Model was a better estimate, while conducting our forcasting story the OSL model stood out to be superior.
+
+
+## 9) Standard Error 
+
+Now we try to find the homoskodasticity, heteroskodasticity-robust and the serial-correlation robust standard errors:
+```{r}
+# standard errors
+
+# within model
+se.win <- plm(log(sales) ~ log(saleslag) + log(price.r) + log(pimin.r) + log(ndi.r)
+                    + factor(year) + factor(state), data = CigarM, model = "within")
+
+# homoskedastic standard errors
+homs <- summary(se.win)$coef[,2]
+
+# heteroskedastic standard errors
+hets <- coeftest(se.win, vcov = vcovHC(se.win, type = "HC0"))[,2]
+
+# serial correlation standard errors
+serial <-  coeftest(se.win, vcov = function(x) 
+                    vcovHC(x, method  = "white1",
+                    cluster = "group"))[,2]
+
+ratios1 <- hets/homs
+ratios2 <- serial/homs
+
+kable(cbind(homs, hets, serial, ratios1, ratios2))
+```
+
+Both the ratios are for heteroskodasticity-robust and the serial-correlation robust standard errors with respect to homoskodasticity. The ratios for all the variables (except the saleslag) are more or less same with small differences. For saleslog the ratio1 is higher by 0.5.
+
+Since the data covers 46 states which can be almost approximated to the whole of US population. 
+
+Standard error is not giving any intution for the inference as it is model dependent and we donot have any evidence to prove otherwise. However, if we are going to make prediction for a different time interval or for the other 4 statse which are not in the data set the the serial-correlation robust standard errors might be important.
+
+
+## Reference 
+[1] Badi H. Baltagi, James M. Griffin and Weiwen Xiong. "To Pool or Not to Pool: Homogeneous versus Heterogeneous Estimators Applied to Cigarette Demand." The Review of Economics and Statistics, Vol. 82, No. 1 (Feb., 2000), pp. 117. 
+
+
+Code is available in:
+https://github.com/roh9singh/19-703-4
